@@ -9,6 +9,7 @@
     "dev": "tsc --watch",
     "scan": "tsx src/index.ts scan",
     "scan:dry-run": "tsx src/index.ts scan --dry-run",
+    "verify": "tsx src/index.ts verify",
     "report": "tsx src/index.ts report",
     "reset": "tsx src/index.ts reset"
   },

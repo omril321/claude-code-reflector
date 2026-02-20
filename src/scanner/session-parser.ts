@@ -8,6 +8,12 @@ import type { RawJSONLEntry, CondensedSession, SessionIndexEntry } from '../type
 
 const MAX_ASSISTANT_CHARS = 2000;
 const MAX_TOTAL_CHARS = 500_000;
+const FULL_MAX_TOTAL_CHARS = 800_000;
+const FULL_WINDOW_SIZE = 50;
+
+export interface ParseOptions {
+  full?: boolean;
+}
 
 interface ParsedMessage {
   role: 'user' | 'assistant';
@@ -17,7 +23,11 @@ interface ParsedMessage {
 /**
  * Parse a JSONL session file into a condensed session for analysis
  */
-export async function parseSession(entry: SessionIndexEntry): Promise<CondensedSession> {
+export async function parseSession(
+  entry: SessionIndexEntry,
+  options?: ParseOptions,
+): Promise<CondensedSession> {
+  const full = options?.full ?? false;
   const messages: ParsedMessage[] = [];
   const skillsUsed: Set<string> = new Set();
 
@@ -50,7 +60,7 @@ export async function parseSession(entry: SessionIndexEntry): Promise<CondensedS
         }
       }
 
-      const text = extractText(content, role);
+      const text = extractText(content, role, full);
       if (!text) continue;
 
       messages.push({ role: role as 'user' | 'assistant', text });
@@ -59,7 +69,7 @@ export async function parseSession(entry: SessionIndexEntry): Promise<CondensedS
     }
   }
 
-  const conversationText = buildConversationText(messages);
+  const conversationText = buildConversationText(messages, full);
 
   return {
     sessionId: entry.sessionId,
@@ -73,9 +83,9 @@ export async function parseSession(entry: SessionIndexEntry): Promise<CondensedS
   };
 }
 
-function extractText(content: unknown, role: string): string {
+function extractText(content: unknown, role: string, full: boolean): string {
   if (typeof content === 'string') {
-    return role === 'assistant' ? truncate(content, MAX_ASSISTANT_CHARS) : content;
+    return role === 'assistant' && !full ? truncate(content, MAX_ASSISTANT_CHARS) : content;
   }
 
   if (Array.isArray(content)) {
@@ -89,7 +99,7 @@ function extractText(content: unknown, role: string): string {
       // Skip thinking, tool_result, tool_use (except Skill which we handle above)
     }
     const joined = parts.join('\n');
-    return role === 'assistant' ? truncate(joined, MAX_ASSISTANT_CHARS) : joined;
+    return role === 'assistant' && !full ? truncate(joined, MAX_ASSISTANT_CHARS) : joined;
   }
 
   return '';
@@ -100,7 +110,7 @@ function truncate(text: string, maxChars: number): string {
   return text.slice(0, maxChars) + '...';
 }
 
-function buildConversationText(messages: ParsedMessage[]): string {
+function buildConversationText(messages: ParsedMessage[], full: boolean): string {
   let parts: string[] = [];
 
   for (const msg of messages) {
@@ -110,20 +120,21 @@ function buildConversationText(messages: ParsedMessage[]): string {
 
   let text = parts.join('\n');
 
-  // If over limit, keep first 20 and last 20 user messages with surrounding context
-  if (text.length > MAX_TOTAL_CHARS) {
+  const maxChars = full ? FULL_MAX_TOTAL_CHARS : MAX_TOTAL_CHARS;
+  const windowSize = full ? FULL_WINDOW_SIZE : 20;
+
+  if (text.length > maxChars) {
     const userIndices = messages
       .map((m, i) => (m.role === 'user' ? i : -1))
       .filter(i => i !== -1);
 
-    if (userIndices.length > 40) {
+    if (userIndices.length > windowSize * 2) {
       const keepIndices = new Set<number>();
-      const first20 = userIndices.slice(0, 20);
-      const last20 = userIndices.slice(-20);
+      const firstN = userIndices.slice(0, windowSize);
+      const lastN = userIndices.slice(-windowSize);
 
-      for (const idx of [...first20, ...last20]) {
+      for (const idx of [...firstN, ...lastN]) {
         keepIndices.add(idx);
-        // Include the preceding assistant message if any
         if (idx > 0 && messages[idx - 1].role === 'assistant') {
           keepIndices.add(idx - 1);
         }
@@ -137,11 +148,10 @@ function buildConversationText(messages: ParsedMessage[]): string {
         }
       }
 
-      // Add truncation marker
-      const firstLast20Idx = last20[0];
+      const firstLastNIdx = lastN[0];
       const insertPos = parts.findIndex((_, i) => {
         const originalIdx = Array.from(keepIndices).sort((a, b) => a - b)[i];
-        return originalIdx >= firstLast20Idx;
+        return originalIdx >= firstLastNIdx;
       });
       if (insertPos > 0) {
         parts.splice(insertPos, 0, '\n[... middle of conversation truncated ...]\n');

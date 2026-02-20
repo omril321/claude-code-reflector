@@ -20,19 +20,56 @@ const DELAY_MS = 500;
 const MAX_RETRIES = 3;
 const INITIAL_BACKOFF_MS = 2000;
 
+const DEFAULT_MODEL = 'claude-sonnet-4@20250514';
+
+const MODEL_ALIASES: Record<string, string> = {
+  haiku: 'claude-haiku-4-5@20251001',
+  sonnet: 'claude-sonnet-4@20250514',
+};
+
+interface ModelPricing {
+  inputPerMillion: number;
+  outputPerMillion: number;
+}
+
+const MODEL_PRICING: Record<string, ModelPricing> = {
+  'claude-haiku-4-5@20251001': { inputPerMillion: 1.0, outputPerMillion: 5.0 },
+  'claude-sonnet-4@20250514': { inputPerMillion: 3.0, outputPerMillion: 15.0 },
+};
+
+const DEFAULT_PRICING: ModelPricing = { inputPerMillion: 3.0, outputPerMillion: 15.0 };
+
+export function getModelPricing(model: string): ModelPricing {
+  const resolved = resolveModelId(model);
+  return MODEL_PRICING[resolved] ?? DEFAULT_PRICING;
+}
+
+export function resolveModelId(nameOrId: string): string {
+  return MODEL_ALIASES[nameOrId] ?? nameOrId;
+}
+
 export interface LLMResponse {
   text: string;
   inputTokens: number;
   outputTokens: number;
 }
 
+export interface CallModelOptions {
+  model?: string;
+  maxTokens?: number;
+}
+
 /**
- * Call the Haiku model with retry on rate limits
+ * Call a model with retry on rate limits
  */
-export async function callHaiku(
+export async function callModel(
   system: string,
   userMessage: string,
+  options?: CallModelOptions,
 ): Promise<LLMResponse> {
+  const model = resolveModelId(options?.model ?? DEFAULT_MODEL);
+  const maxTokens = options?.maxTokens ?? 4096;
+
   // Small delay between calls
   await sleep(DELAY_MS);
 
@@ -41,8 +78,8 @@ export async function callHaiku(
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
       const response = await getClient().messages.create({
-        model: 'claude-haiku-4-5@20251001',
-        max_tokens: 4096,
+        model,
+        max_tokens: maxTokens,
         system,
         messages: [{ role: 'user', content: userMessage }],
         temperature: 0,

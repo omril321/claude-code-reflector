@@ -3,14 +3,23 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
-import { readAllSessionEntries } from './scanner/index-reader.js';
+import { readAllSessionEntries, findSessionEntry } from './scanner/index-reader.js';
 import { parseSession } from './scanner/session-parser.js';
 import { loadContext } from './scanner/skill-catalog.js';
 import { analyzeTier1 } from './analyzer/tier1.js';
+import { verifySession } from './analyzer/tier2.js';
+import { resolveModelId } from './analyzer/anthropic-client.js';
 import { loadState, saveState, isSessionProcessed, markSessionProcessed } from './state/manager.js';
-import { writeReport, printSummary, printLatestReport } from './reporter/index.js';
+import {
+  writeReport,
+  printSummary,
+  printLatestReport,
+  writeVerificationReport,
+  printVerificationSummary,
+  printLatestVerifiedReport,
+} from './reporter/index.js';
 import { DEFAULT_STATE } from './types/state.js';
-import type { Tier1Result } from './types/findings.js';
+import type { Tier1Result, ReflectorReport, Tier2Result } from './types/findings.js';
 import { promises as fs } from 'fs';
 import { join } from 'path';
 
@@ -19,6 +28,7 @@ const DEFAULT_MIN_MESSAGES = 4;
 
 const PROJECT_DIR = join(import.meta.dirname, '..');
 const STATE_FILE = join(PROJECT_DIR, 'state.json');
+const REPORTS_DIR = join(PROJECT_DIR, 'reports');
 
 const program = new Command();
 
@@ -130,11 +140,102 @@ program
   });
 
 program
+  .command('verify')
+  .description('Deep-verify Tier 1 findings against full session conversations')
+  .option('--model <name>', 'Model to use (haiku|sonnet or full model ID)', 'sonnet')
+  .option('--report <path>', 'Path to Tier 1 report to verify (defaults to latest)')
+  .option('--dry-run', 'Show what would be verified without calling AI')
+  .action(async (opts) => {
+    const modelId = resolveModelId(opts.model);
+
+    // Load Tier 1 report
+    const reportPath = opts.report ?? join(REPORTS_DIR, 'latest.json');
+    let report: ReflectorReport;
+    try {
+      const content = await fs.readFile(reportPath, 'utf-8');
+      report = JSON.parse(content);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        console.log(chalk.yellow('No Tier 1 report found. Run "reflector scan" first.'));
+      } else {
+        console.log(chalk.red(`Failed to read report: ${(err as Error).message}`));
+      }
+      return;
+    }
+
+    // Filter to sessions with findings
+    const sessionsWithFindings = report.results.filter(r => r.flags.length > 0);
+    const totalFindings = sessionsWithFindings.reduce((sum, r) => sum + r.flags.length, 0);
+
+    if (sessionsWithFindings.length === 0) {
+      console.log(chalk.green('No findings to verify — Tier 1 report is clean.'));
+      return;
+    }
+
+    console.log(`Verifying ${chalk.cyan(totalFindings)} finding(s) across ${chalk.cyan(sessionsWithFindings.length)} session(s) with ${chalk.dim(modelId)}`);
+
+    if (opts.dryRun) {
+      console.log();
+      for (const result of sessionsWithFindings) {
+        console.log(`  ${chalk.dim(result.sessionId.slice(0, 8))} ${result.summary}`);
+        for (const flag of result.flags) {
+          const skillLabel = flag.skillName ? ` (${flag.skillName})` : '';
+          console.log(`    ${chalk.dim('•')} [${flag.type}] ${flag.confidence}${skillLabel}`);
+        }
+      }
+      console.log();
+      console.log(chalk.dim('(dry run - no API calls made)'));
+      return;
+    }
+
+    const context = await loadContext();
+    const results: Tier2Result[] = [];
+
+    for (let i = 0; i < sessionsWithFindings.length; i++) {
+      const tier1Result = sessionsWithFindings[i];
+      const label = `[${i + 1}/${sessionsWithFindings.length}] ${tier1Result.summary || tier1Result.sessionId.slice(0, 8)}`;
+      const spinner = ora(label).start();
+
+      try {
+        const entry = await findSessionEntry(tier1Result.sessionId);
+        if (!entry) {
+          spinner.warn(`${label} - session not found, skipping`);
+          continue;
+        }
+
+        const result = await verifySession(entry, tier1Result.flags, context, modelId);
+        results.push(result);
+
+        const confirmed = result.confirmedCount;
+        const rejected = result.rejectedCount;
+        spinner.succeed(
+          `${label} - ${chalk.green(`${confirmed} confirmed`)}, ${chalk.red(`${rejected} rejected`)}`,
+        );
+      } catch (err) {
+        spinner.fail(`${label} - ${chalk.red((err as Error).message)}`);
+      }
+    }
+
+    if (results.length > 0) {
+      const verifiedPath = await writeVerificationReport(results, reportPath, opts.model);
+      console.log(chalk.dim(`Verified report saved to: ${verifiedPath}`));
+      printVerificationSummary(results, opts.model);
+    } else {
+      console.log(chalk.yellow('No sessions were verified.'));
+    }
+  });
+
+program
   .command('report')
   .description('View the latest report')
   .option('--json', 'Output raw JSON')
+  .option('--verified', 'Show the verified report instead of Tier 1')
   .action(async (opts) => {
-    await printLatestReport(opts.json);
+    if (opts.verified) {
+      await printLatestVerifiedReport(opts.json);
+    } else {
+      await printLatestReport(opts.json);
+    }
   });
 
 program

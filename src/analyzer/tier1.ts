@@ -5,7 +5,7 @@
 import type { CondensedSession } from '../types/session.js';
 import type { Tier1Flag, Tier1Result } from '../types/findings.js';
 import type { ContextInfo } from '../scanner/skill-catalog.js';
-import { callHaiku } from './anthropic-client.js';
+import { callModel } from './anthropic-client.js';
 import { buildTier1SystemPrompt, buildTier1UserMessage } from './prompts.js';
 
 /**
@@ -18,7 +18,7 @@ export async function analyzeTier1(
   const system = buildTier1SystemPrompt(context.claudeMdContent, context.skills);
   const userMessage = buildTier1UserMessage(session.conversationText, session.skillsUsed);
 
-  const response = await callHaiku(system, userMessage);
+  const response = await callModel(system, userMessage);
 
   let flags: Tier1Flag[] = [];
   try {

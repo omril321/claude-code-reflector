@@ -5,14 +5,29 @@
 import { promises as fs } from 'fs';
 import { join } from 'path';
 import chalk from 'chalk';
-import type { Tier1Result, ReflectorReport, FlagType } from '../types/findings.js';
+import type {
+  Tier1Result,
+  ReflectorReport,
+  FlagType,
+  Tier2Result,
+  VerificationReport,
+} from '../types/findings.js';
+import { getModelPricing } from '../analyzer/anthropic-client.js';
 
 const PROJECT_DIR = join(import.meta.dirname, '..', '..');
 const REPORTS_DIR = join(PROJECT_DIR, 'reports');
 
-// Haiku pricing per million tokens (Vertex AI)
-const HAIKU_INPUT_PRICE = 1.0;
-const HAIKU_OUTPUT_PRICE = 5.0;
+function estimateCost(
+  inputTokens: number,
+  outputTokens: number,
+  model = 'sonnet',
+): number {
+  const pricing = getModelPricing(model);
+  return (
+    (inputTokens / 1_000_000) * pricing.inputPerMillion +
+    (outputTokens / 1_000_000) * pricing.outputPerMillion
+  );
+}
 
 export async function writeReport(results: Tier1Result[]): Promise<string> {
   const findingsByType: Record<FlagType, number> = {
@@ -34,9 +49,6 @@ export async function writeReport(results: Tier1Result[]): Promise<string> {
 
   const totalFindings = Object.values(findingsByType).reduce((a, b) => a + b, 0);
   const sessionsWithFindings = results.filter(r => r.flags.length > 0).length;
-  const estimatedCost =
-    (totalInputTokens / 1_000_000) * HAIKU_INPUT_PRICE +
-    (totalOutputTokens / 1_000_000) * HAIKU_OUTPUT_PRICE;
 
   const report: ReflectorReport = {
     generatedAt: new Date().toISOString(),
@@ -44,7 +56,7 @@ export async function writeReport(results: Tier1Result[]): Promise<string> {
     sessionsWithFindings,
     totalFindings,
     findingsByType,
-    estimatedCost,
+    estimatedCost: estimateCost(totalInputTokens, totalOutputTokens),
     results,
   };
 
@@ -82,9 +94,7 @@ export function printSummary(results: Tier1Result[]): void {
 
   const totalFindings = Object.values(findingsByType).reduce((a, b) => a + b, 0);
   const sessionsWithFindings = results.filter(r => r.flags.length > 0).length;
-  const estimatedCost =
-    (totalInputTokens / 1_000_000) * HAIKU_INPUT_PRICE +
-    (totalOutputTokens / 1_000_000) * HAIKU_OUTPUT_PRICE;
+  const cost = estimateCost(totalInputTokens, totalOutputTokens);
 
   console.log();
   console.log(chalk.bold('Reflector Report'));
@@ -99,7 +109,7 @@ export function printSummary(results: Tier1Result[]): void {
   console.log(`  skill-correction:  ${findingsByType['skill-correction']}`);
   console.log();
   console.log(chalk.dim(`Tokens: ${totalInputTokens.toLocaleString()} in / ${totalOutputTokens.toLocaleString()} out`));
-  console.log(chalk.dim(`Estimated cost: $${estimatedCost.toFixed(4)}`));
+  console.log(chalk.dim(`Estimated cost: $${cost.toFixed(4)}`));
   console.log();
 
   console.log(chalk.gray('─'.repeat(40)));
@@ -153,7 +163,120 @@ export function printSummary(results: Tier1Result[]): void {
 
   // Footer
   console.log(chalk.dim(`Tokens: ${totalInputTokens.toLocaleString()} in / ${totalOutputTokens.toLocaleString()} out`));
-  console.log(chalk.dim(`Estimated cost: $${estimatedCost.toFixed(4)}`));
+  console.log(chalk.dim(`Estimated cost: $${cost.toFixed(4)}`));
+  console.log();
+}
+
+export async function writeVerificationReport(
+  results: Tier2Result[],
+  sourceReport: string,
+  model: string,
+): Promise<string> {
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let findingsInput = 0;
+  let findingsConfirmed = 0;
+  let findingsRejected = 0;
+
+  for (const result of results) {
+    totalInputTokens += result.tokenUsage.inputTokens;
+    totalOutputTokens += result.tokenUsage.outputTokens;
+    findingsInput += result.verdicts.length;
+    findingsConfirmed += result.confirmedCount;
+    findingsRejected += result.rejectedCount;
+  }
+
+  const report: VerificationReport = {
+    generatedAt: new Date().toISOString(),
+    sourceReport,
+    model,
+    sessionsVerified: results.length,
+    findingsInput,
+    findingsConfirmed,
+    findingsRejected,
+    estimatedCost: estimateCost(totalInputTokens, totalOutputTokens, model),
+    results,
+  };
+
+  const latestPath = join(REPORTS_DIR, 'latest-verified.json');
+  await fs.writeFile(latestPath, JSON.stringify(report, null, 2), 'utf-8');
+
+  return latestPath;
+}
+
+export function printVerificationSummary(results: Tier2Result[], model: string): void {
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let findingsInput = 0;
+  let findingsConfirmed = 0;
+  let findingsRejected = 0;
+
+  for (const result of results) {
+    totalInputTokens += result.tokenUsage.inputTokens;
+    totalOutputTokens += result.tokenUsage.outputTokens;
+    findingsInput += result.verdicts.length;
+    findingsConfirmed += result.confirmedCount;
+    findingsRejected += result.rejectedCount;
+  }
+
+  const cost = estimateCost(totalInputTokens, totalOutputTokens, model);
+
+  console.log();
+  console.log(chalk.bold('Verification Report'));
+  console.log(chalk.gray('─'.repeat(40)));
+  console.log(`Sessions verified:   ${chalk.cyan(results.length)}`);
+  console.log(`Findings input:      ${findingsInput}`);
+  console.log(`Findings confirmed:  ${chalk.green(findingsConfirmed)}`);
+  console.log(`Findings rejected:   ${chalk.red(findingsRejected)}`);
+  console.log();
+  console.log(chalk.dim(`Tokens: ${totalInputTokens.toLocaleString()} in / ${totalOutputTokens.toLocaleString()} out`));
+  console.log(chalk.dim(`Estimated cost: $${cost.toFixed(4)}`));
+  console.log();
+  console.log(chalk.gray('─'.repeat(40)));
+
+  for (const result of results) {
+    const confirmed = result.verdicts.filter(v => v.verified);
+    const rejected = result.verdicts.filter(v => !v.verified);
+
+    if (confirmed.length === 0 && rejected.length === 0) continue;
+
+    console.log();
+    console.log(chalk.bold(result.summary || result.sessionId.slice(0, 8)));
+    console.log(`  ${chalk.dim(`${confirmed.length} confirmed, ${rejected.length} rejected`)}`);
+    console.log();
+
+    for (const verdict of confirmed) {
+      const f = verdict.originalFinding;
+      const typeColor =
+        f.type === 'missing-rule' ? chalk.red :
+        f.type === 'skill-unused' ? chalk.yellow :
+        chalk.magenta;
+      const skillLabel = f.skillName ? ` ${f.skillName}` : '';
+      console.log(`  ${chalk.green('✓')} ${typeColor(`[${f.type}]`)} ${chalk.dim(`(${verdict.confidence})`)}${skillLabel}`);
+      console.log(`     ${chalk.white('Reasoning:')} ${verdict.reasoning}`);
+      console.log(`     ${chalk.green('Recommendation:')} ${verdict.refinedRecommendation ?? f.recommendation}`);
+      if (verdict.refinedSuggestedRule) {
+        console.log(`     ${chalk.blue('Suggested rule:')} ${verdict.refinedSuggestedRule}`);
+      }
+      if (verdict.evidence.length > 0) {
+        console.log(`     ${chalk.dim('Evidence:')}`);
+        for (const e of verdict.evidence) {
+          console.log(`       ${chalk.dim('•')} ${e}`);
+        }
+      }
+      console.log();
+    }
+
+    for (const verdict of rejected) {
+      const f = verdict.originalFinding;
+      console.log(`  ${chalk.red('✗')} ${chalk.dim(`[${f.type}]`)} ${f.skillName ?? ''}`);
+      console.log(`     ${chalk.dim('Rejected:')} ${verdict.reasoning}`);
+      console.log();
+    }
+  }
+
+  console.log(chalk.dim(`Tokens: ${totalInputTokens.toLocaleString()} in / ${totalOutputTokens.toLocaleString()} out`));
+  console.log(chalk.dim(`Estimated cost: $${cost.toFixed(4)}`));
   console.log();
 }
 
@@ -170,6 +293,25 @@ export async function printLatestReport(asJson: boolean): Promise<void> {
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
       console.log(chalk.yellow('No reports found. Run "reflector scan" first.'));
+    } else {
+      throw err;
+    }
+  }
+}
+
+export async function printLatestVerifiedReport(asJson: boolean): Promise<void> {
+  const latestPath = join(REPORTS_DIR, 'latest-verified.json');
+  try {
+    const content = await fs.readFile(latestPath, 'utf-8');
+    if (asJson) {
+      console.log(content);
+    } else {
+      const report: VerificationReport = JSON.parse(content);
+      printVerificationSummary(report.results, report.model);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      console.log(chalk.yellow('No verified reports found. Run "reflector verify" first.'));
     } else {
       throw err;
     }

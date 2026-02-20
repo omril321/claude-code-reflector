@@ -82,6 +82,35 @@ function shouldInclude(entry: SessionIndexEntry, options: ScanOptions): boolean 
   return true;
 }
 
+/**
+ * Find a single session entry by ID across all projects (no filtering)
+ */
+export async function findSessionEntry(sessionId: string): Promise<SessionIndexEntry | null> {
+  let projectDirs: string[];
+  try {
+    const dirents = await fs.readdir(PROJECTS_DIR, { withFileTypes: true });
+    projectDirs = dirents
+      .filter(d => d.isDirectory())
+      .map(d => join(PROJECTS_DIR, d.name));
+  } catch {
+    return null;
+  }
+
+  for (const projectDir of projectDirs) {
+    const indexPath = join(projectDir, 'sessions-index.json');
+    try {
+      const content = await fs.readFile(indexPath, 'utf-8');
+      const index: SessionIndex = JSON.parse(content);
+      const entry = index.entries.find(e => e.sessionId === sessionId);
+      if (entry) return entry;
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
 function normalizePath(p: string): string {
   return p.replace(/^~/, homedir()).replace(/\/+$/, '');
 }

@@ -34,3 +34,38 @@ export interface ReflectorReport {
   estimatedCost: number;
   results: Tier1Result[];
 }
+
+export interface Tier2Verdict {
+  originalFinding: Tier1Flag;
+  verified: boolean;
+  reasoning: string;
+  refinedRecommendation?: string;
+  refinedSuggestedRule?: string;
+  evidence: string[];
+  confidence: 'low' | 'medium' | 'high';
+}
+
+export interface Tier2Result {
+  sessionId: string;
+  projectPath: string;
+  summary: string;
+  verdicts: Tier2Verdict[];
+  confirmedCount: number;
+  rejectedCount: number;
+  tokenUsage: {
+    inputTokens: number;
+    outputTokens: number;
+  };
+}
+
+export interface VerificationReport {
+  generatedAt: string;
+  sourceReport: string;
+  model: string;
+  sessionsVerified: number;
+  findingsInput: number;
+  findingsConfirmed: number;
+  findingsRejected: number;
+  estimatedCost: number;
+  results: Tier2Result[];
+}
