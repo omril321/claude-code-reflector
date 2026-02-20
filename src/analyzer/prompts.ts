@@ -43,7 +43,8 @@ Respond with ONLY a JSON array of findings. No markdown, no explanation. Each fi
 {
   "type": "missing-rule" | "skill-unused" | "skill-correction",
   "excerpt": "Brief quote from the conversation showing the evidence",
-  "reasoning": "Why this is a finding",
+  "whatHappened": "One-sentence plain English description of what went wrong in the session",
+  "recommendation": "One-sentence concrete action to take next time (start with imperative verb: Add, Use, Invoke)",
   "confidence": "low" | "medium" | "high",
   "suggestedRule": "The rule that should be added to CLAUDE.md (for missing-rule type)",
   "skillName": "Name of the relevant skill (for skill-unused and skill-correction types)"

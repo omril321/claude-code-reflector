@@ -59,7 +59,8 @@ function isValidFlag(obj: unknown): obj is Tier1Flag {
     typeof flag.type === 'string' &&
     validTypes.includes(flag.type) &&
     typeof flag.excerpt === 'string' &&
-    typeof flag.reasoning === 'string' &&
+    typeof flag.whatHappened === 'string' &&
+    typeof flag.recommendation === 'string' &&
     typeof flag.confidence === 'string' &&
     validConfidences.includes(flag.confidence)
   );

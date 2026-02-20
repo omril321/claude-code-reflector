@@ -102,30 +102,59 @@ export function printSummary(results: Tier1Result[]): void {
   console.log(chalk.dim(`Estimated cost: $${estimatedCost.toFixed(4)}`));
   console.log();
 
-  // Print top findings
-  const allFlags = results
-    .flatMap(r => r.flags.map(f => ({ ...f, sessionSummary: r.summary, sessionId: r.sessionId })))
-    .sort((a, b) => {
+  console.log(chalk.gray('─'.repeat(40)));
+
+  // Group findings by session
+  const typeLabels: Record<FlagType, [string, string]> = {
+    'missing-rule': ['missing rule', 'missing rules'],
+    'skill-unused': ['unused skill', 'unused skills'],
+    'skill-correction': ['skill correction', 'skill corrections'],
+  };
+
+  const sessionsWithFlags = results.filter(r => r.flags.length > 0);
+
+  for (const result of sessionsWithFlags) {
+    console.log();
+    console.log(chalk.bold(result.summary || result.sessionId.slice(0, 8)));
+
+    // Session summary line (e.g., "3 unused skills, 1 missing rule")
+    const typeCounts: Partial<Record<FlagType, number>> = {};
+    for (const flag of result.flags) {
+      typeCounts[flag.type] = (typeCounts[flag.type] || 0) + 1;
+    }
+    const parts = (Object.entries(typeCounts) as [FlagType, number][]).map(
+      ([type, count]) => `${count} ${typeLabels[type][count === 1 ? 0 : 1]}`
+    );
+    console.log(`  ${chalk.dim(parts.join(', '))}`);
+    console.log();
+
+    // Sort findings: high → medium → low
+    const sortedFlags = [...result.flags].sort((a, b) => {
       const conf = { high: 3, medium: 2, low: 1 };
       return conf[b.confidence] - conf[a.confidence];
     });
 
-  if (allFlags.length > 0) {
-    console.log(chalk.bold('Top Findings:'));
-    console.log();
-    for (const flag of allFlags.slice(0, 10)) {
-      const typeColor = flag.type === 'missing-rule' ? chalk.red : flag.type === 'skill-unused' ? chalk.yellow : chalk.magenta;
-      console.log(`  ${typeColor(`[${flag.type}]`)} ${chalk.dim(`(${flag.confidence})`)} ${flag.reasoning}`);
+    for (let i = 0; i < sortedFlags.length; i++) {
+      const flag = sortedFlags[i];
+      const typeColor =
+        flag.type === 'missing-rule' ? chalk.red :
+        flag.type === 'skill-unused' ? chalk.yellow :
+        chalk.magenta;
+      const skillLabel = flag.skillName ? ` ${flag.skillName}` : '';
+      console.log(`  ${i + 1}. ${typeColor(`[${flag.type}]`)} ${chalk.dim(`(${flag.confidence})`)}${skillLabel}`);
+      console.log(`     ${chalk.white('What happened:')} ${flag.whatHappened}`);
+      console.log(`     ${chalk.green('Recommendation:')} ${flag.recommendation}`);
       if (flag.suggestedRule) {
-        console.log(`    ${chalk.green('Suggested rule:')} ${flag.suggestedRule}`);
+        console.log(`     ${chalk.blue('Suggested rule:')} ${flag.suggestedRule}`);
       }
-      if (flag.skillName) {
-        console.log(`    ${chalk.blue('Skill:')} ${flag.skillName}`);
-      }
-      console.log(`    ${chalk.dim(`Session: ${flag.sessionSummary}`)}`);
       console.log();
     }
   }
+
+  // Footer
+  console.log(chalk.dim(`Tokens: ${totalInputTokens.toLocaleString()} in / ${totalOutputTokens.toLocaleString()} out`));
+  console.log(chalk.dim(`Estimated cost: $${estimatedCost.toFixed(4)}`));
+  console.log();
 }
 
 export async function printLatestReport(asJson: boolean): Promise<void> {

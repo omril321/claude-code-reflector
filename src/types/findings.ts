@@ -7,7 +7,8 @@ export type FlagType = 'missing-rule' | 'skill-unused' | 'skill-correction';
 export interface Tier1Flag {
   type: FlagType;
   excerpt: string;
-  reasoning: string;
+  whatHappened: string;
+  recommendation: string;
   confidence: 'low' | 'medium' | 'high';
   suggestedRule?: string;
   skillName?: string;
