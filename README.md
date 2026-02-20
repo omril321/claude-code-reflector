@@ -58,10 +58,12 @@ yarn pipeline -- --limit 30
 yarn pipeline                          # Scan → verify → report in one command
 yarn pipeline -- --limit 50            # Process up to 50 sessions
 yarn pipeline -- --all --limit 50      # Re-process from scratch
+yarn pipeline -- --concurrency 3       # Limit parallel API calls (default: 5)
 
 # Individual steps (if you need more control)
 yarn scan                         # Tier 1 only (incremental)
 yarn scan -- --limit 20           # Tier 1 with limit
+yarn scan -- --concurrency 3      # Control parallelism
 yarn scan -- --all                # Re-process everything
 yarn scan -- --session <id>       # Process a single session
 yarn scan:dry-run                 # List matching sessions without API calls

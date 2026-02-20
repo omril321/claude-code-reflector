@@ -10,6 +10,7 @@ Sibling project to `~/private/code-claude-auto-learn` (which captures what the u
 |---------|-------------|
 | `yarn pipeline` | Full pipeline: scan → verify → report |
 | `yarn pipeline -- --limit 50` | Full pipeline on up to 50 sessions |
+| `yarn pipeline -- --concurrency 3` | Control parallel API calls (default: 5) |
 | `yarn scan` | Run Tier 1 analysis (incremental, skips processed sessions) |
 | `yarn scan:dry-run` | List matching sessions without API calls |
 | `yarn scan -- --limit 5` | Process at most 5 sessions |
@@ -63,6 +64,7 @@ Typical usage: `yarn pipeline -- --limit 50` (runs scan → verify → verified 
 - **SDK**: `@anthropic-ai/vertex-sdk` with `AnthropicVertex` client
 - **Models**: Tier 1 defaults to `claude-haiku-4-5@20251001`, Tier 2 to `claude-sonnet-4@20250514`. Configurable via `--model` flag on verify.
 - **JSONL parsing**: `readline.createInterface` + `createReadStream`
+- **Concurrency**: Sessions are processed in parallel (default 5, configurable via `--concurrency`). State saves are serialized via a promise queue to prevent corruption.
 - **State persistence**: Atomic write (temp file + rename), saved after each session for crash safety
 - **Truncation**: Tier 1 caps assistant messages at 2000 chars, sessions over 500K chars keep first/last 20 user messages. Tier 2 uses `{ full: true }` to skip truncation (falls back to first/last 50 at 800K chars).
 - **Naming**: kebab-case files, PascalCase types, camelCase functions

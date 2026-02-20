@@ -18,17 +18,44 @@ import {
   printVerificationSummary,
   printLatestVerifiedReport,
 } from './reporter/index.js';
-import { DEFAULT_STATE } from './types/state.js';
+import { DEFAULT_STATE, type ReflectorState } from './types/state.js';
 import type { Tier1Result, ReflectorReport, Tier2Result } from './types/findings.js';
 import { promises as fs } from 'fs';
 import { join } from 'path';
 
-const DEFAULT_EXCLUDES = ['/Users/omrila/private/claude-code-reflector'];
-const DEFAULT_MIN_MESSAGES = 4;
-
 const PROJECT_DIR = join(import.meta.dirname, '..');
 const STATE_FILE = join(PROJECT_DIR, 'state.json');
 const REPORTS_DIR = join(PROJECT_DIR, 'reports');
+
+const DEFAULT_EXCLUDES = [PROJECT_DIR];
+const DEFAULT_MIN_MESSAGES = 4;
+const DEFAULT_CONCURRENCY = 5;
+
+// --- Concurrency helpers ---
+
+async function processPool<T>(
+  items: T[],
+  concurrency: number,
+  processor: (item: T) => Promise<void>,
+): Promise<void> {
+  const queue = [...items];
+  const workers = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    async () => {
+      while (queue.length > 0) {
+        const item = queue.shift()!;
+        await processor(item);
+      }
+    },
+  );
+  await Promise.all(workers);
+}
+
+let stateSaveQueue = Promise.resolve();
+function queueSaveState(state: ReflectorState): Promise<void> {
+  stateSaveQueue = stateSaveQueue.then(() => saveState(state));
+  return stateSaveQueue;
+}
 
 const program = new Command();
 
@@ -46,6 +73,7 @@ program
   .option('--min-messages <n>', 'Minimum message count', String(DEFAULT_MIN_MESSAGES))
   .option('--session <id>', 'Process a single session by ID')
   .option('--limit <n>', 'Maximum sessions to process')
+  .option('--concurrency <n>', 'Number of parallel sessions to process', String(DEFAULT_CONCURRENCY))
   .action(async (opts) => {
     const minMessages = parseInt(opts.minMessages, 10);
     const limit = opts.limit ? parseInt(opts.limit, 10) : undefined;
@@ -98,36 +126,39 @@ program
     // Load context for analysis
     const context = await loadContext();
     const results: Tier1Result[] = [];
+    const concurrency = parseInt(opts.concurrency, 10);
+    let completed = 0;
+    const total = toProcess.length;
 
-    for (let i = 0; i < toProcess.length; i++) {
-      const entry = toProcess[i];
-      const label = `[${i + 1}/${toProcess.length}] ${entry.summary || entry.sessionId.slice(0, 8)}`;
-      const sessionSpinner = ora(label).start();
+    await processPool(toProcess, concurrency, async (entry) => {
+      const label = entry.summary || entry.sessionId.slice(0, 8);
 
       try {
         const session = await parseSession(entry);
 
         if (!session.conversationText.trim()) {
-          sessionSpinner.warn(`${label} - empty conversation, skipping`);
-          continue;
+          completed++;
+          console.log(`[${completed}/${total}] ${chalk.yellow('⚠')} ${label} - empty, skipping`);
+          return;
         }
 
         const result = await analyzeTier1(session, context);
         results.push(result);
 
-        // Save state after each session (crash-safe)
         markSessionProcessed(state, entry.sessionId, entry.modified, result.flags.length);
-        await saveState(state);
+        await queueSaveState(state);
 
+        completed++;
         if (result.flags.length > 0) {
-          sessionSpinner.succeed(`${label} - ${chalk.yellow(`${result.flags.length} finding(s)`)}`);
+          console.log(`[${completed}/${total}] ${chalk.green('✓')} ${label} - ${chalk.yellow(`${result.flags.length} finding(s)`)}`);
         } else {
-          sessionSpinner.succeed(`${label} - ${chalk.green('clean')}`);
+          console.log(`[${completed}/${total}] ${chalk.green('✓')} ${label} - ${chalk.green('clean')}`);
         }
       } catch (err) {
-        sessionSpinner.fail(`${label} - ${chalk.red((err as Error).message)}`);
+        completed++;
+        console.log(`[${completed}/${total}] ${chalk.red('✗')} ${label} - ${chalk.red((err as Error).message)}`);
       }
-    }
+    });
 
     // Write report
     if (results.length > 0) {
@@ -145,6 +176,7 @@ program
   .option('--model <name>', 'Model to use (haiku|sonnet or full model ID)', 'sonnet')
   .option('--report <path>', 'Path to Tier 1 report to verify (defaults to latest)')
   .option('--dry-run', 'Show what would be verified without calling AI')
+  .option('--concurrency <n>', 'Number of parallel sessions to verify', String(DEFAULT_CONCURRENCY))
   .action(async (opts) => {
     const modelId = resolveModelId(opts.model);
 
@@ -190,31 +222,33 @@ program
 
     const context = await loadContext();
     const results: Tier2Result[] = [];
+    const concurrency = parseInt(opts.concurrency, 10);
+    let completed = 0;
+    const total = sessionsWithFindings.length;
 
-    for (let i = 0; i < sessionsWithFindings.length; i++) {
-      const tier1Result = sessionsWithFindings[i];
-      const label = `[${i + 1}/${sessionsWithFindings.length}] ${tier1Result.summary || tier1Result.sessionId.slice(0, 8)}`;
-      const spinner = ora(label).start();
+    await processPool(sessionsWithFindings, concurrency, async (tier1Result) => {
+      const label = tier1Result.summary || tier1Result.sessionId.slice(0, 8);
 
       try {
         const entry = await findSessionEntry(tier1Result.sessionId);
         if (!entry) {
-          spinner.warn(`${label} - session not found, skipping`);
-          continue;
+          completed++;
+          console.log(`[${completed}/${total}] ${chalk.yellow('⚠')} ${label} - session not found, skipping`);
+          return;
         }
 
         const result = await verifySession(entry, tier1Result.flags, context, modelId);
         results.push(result);
 
-        const confirmed = result.confirmedCount;
-        const rejected = result.rejectedCount;
-        spinner.succeed(
-          `${label} - ${chalk.green(`${confirmed} confirmed`)}, ${chalk.red(`${rejected} rejected`)}`,
+        completed++;
+        console.log(
+          `[${completed}/${total}] ${chalk.green('✓')} ${label} - ${chalk.green(`${result.confirmedCount} confirmed`)}, ${chalk.red(`${result.rejectedCount} rejected`)}`,
         );
       } catch (err) {
-        spinner.fail(`${label} - ${chalk.red((err as Error).message)}`);
+        completed++;
+        console.log(`[${completed}/${total}] ${chalk.red('✗')} ${label} - ${chalk.red((err as Error).message)}`);
       }
-    }
+    });
 
     if (results.length > 0) {
       const verifiedPath = await writeVerificationReport(results, reportPath, opts.model);
@@ -232,10 +266,12 @@ program
   .option('--exclude <paths...>', 'Project paths to exclude', DEFAULT_EXCLUDES)
   .option('--min-messages <n>', 'Minimum message count', String(DEFAULT_MIN_MESSAGES))
   .option('--limit <n>', 'Maximum sessions to process')
+  .option('--concurrency <n>', 'Number of parallel sessions to process', String(DEFAULT_CONCURRENCY))
   .option('--model <name>', 'Model for verification (haiku|sonnet)', 'sonnet')
   .action(async (opts) => {
     const minMessages = parseInt(opts.minMessages, 10);
     const limit = opts.limit ? parseInt(opts.limit, 10) : undefined;
+    const concurrency = parseInt(opts.concurrency, 10);
 
     // --- Tier 1: Scan ---
     console.log(chalk.bold('\n── Tier 1: Scan ──\n'));
@@ -265,34 +301,37 @@ program
 
     const context = await loadContext();
     const scanResults: Tier1Result[] = [];
+    let scanCompleted = 0;
+    const scanTotal = toProcess.length;
 
-    for (let i = 0; i < toProcess.length; i++) {
-      const entry = toProcess[i];
-      const label = `[${i + 1}/${toProcess.length}] ${entry.summary || entry.sessionId.slice(0, 8)}`;
-      const sessionSpinner = ora(label).start();
+    await processPool(toProcess, concurrency, async (entry) => {
+      const label = entry.summary || entry.sessionId.slice(0, 8);
 
       try {
         const session = await parseSession(entry);
         if (!session.conversationText.trim()) {
-          sessionSpinner.warn(`${label} - empty conversation, skipping`);
-          continue;
+          scanCompleted++;
+          console.log(`[${scanCompleted}/${scanTotal}] ${chalk.yellow('⚠')} ${label} - empty, skipping`);
+          return;
         }
 
         const result = await analyzeTier1(session, context);
         scanResults.push(result);
 
         markSessionProcessed(state, entry.sessionId, entry.modified, result.flags.length);
-        await saveState(state);
+        await queueSaveState(state);
 
+        scanCompleted++;
         if (result.flags.length > 0) {
-          sessionSpinner.succeed(`${label} - ${chalk.yellow(`${result.flags.length} finding(s)`)}`);
+          console.log(`[${scanCompleted}/${scanTotal}] ${chalk.green('✓')} ${label} - ${chalk.yellow(`${result.flags.length} finding(s)`)}`);
         } else {
-          sessionSpinner.succeed(`${label} - ${chalk.green('clean')}`);
+          console.log(`[${scanCompleted}/${scanTotal}] ${chalk.green('✓')} ${label} - ${chalk.green('clean')}`);
         }
       } catch (err) {
-        sessionSpinner.fail(`${label} - ${chalk.red((err as Error).message)}`);
+        scanCompleted++;
+        console.log(`[${scanCompleted}/${scanTotal}] ${chalk.red('✗')} ${label} - ${chalk.red((err as Error).message)}`);
       }
-    }
+    });
 
     if (scanResults.length === 0) {
       console.log(chalk.yellow('No sessions were analyzed.'));
@@ -316,29 +355,32 @@ program
     console.log(`Verifying ${chalk.cyan(totalFindings)} finding(s) across ${chalk.cyan(sessionsWithFindings.length)} session(s) with ${chalk.dim(modelId)}`);
 
     const verifyResults: Tier2Result[] = [];
+    let verifyCompleted = 0;
+    const verifyTotal = sessionsWithFindings.length;
 
-    for (let i = 0; i < sessionsWithFindings.length; i++) {
-      const tier1Result = sessionsWithFindings[i];
-      const label = `[${i + 1}/${sessionsWithFindings.length}] ${tier1Result.summary || tier1Result.sessionId.slice(0, 8)}`;
-      const vSpinner = ora(label).start();
+    await processPool(sessionsWithFindings, concurrency, async (tier1Result) => {
+      const label = tier1Result.summary || tier1Result.sessionId.slice(0, 8);
 
       try {
         const entry = await findSessionEntry(tier1Result.sessionId);
         if (!entry) {
-          vSpinner.warn(`${label} - session not found, skipping`);
-          continue;
+          verifyCompleted++;
+          console.log(`[${verifyCompleted}/${verifyTotal}] ${chalk.yellow('⚠')} ${label} - session not found, skipping`);
+          return;
         }
 
         const result = await verifySession(entry, tier1Result.flags, context, modelId);
         verifyResults.push(result);
 
-        vSpinner.succeed(
-          `${label} - ${chalk.green(`${result.confirmedCount} confirmed`)}, ${chalk.red(`${result.rejectedCount} rejected`)}`,
+        verifyCompleted++;
+        console.log(
+          `[${verifyCompleted}/${verifyTotal}] ${chalk.green('✓')} ${label} - ${chalk.green(`${result.confirmedCount} confirmed`)}, ${chalk.red(`${result.rejectedCount} rejected`)}`,
         );
       } catch (err) {
-        vSpinner.fail(`${label} - ${chalk.red((err as Error).message)}`);
+        verifyCompleted++;
+        console.log(`[${verifyCompleted}/${verifyTotal}] ${chalk.red('✗')} ${label} - ${chalk.red((err as Error).message)}`);
       }
-    }
+    });
 
     if (verifyResults.length > 0) {
       await writeVerificationReport(verifyResults, reportPath, opts.model);
