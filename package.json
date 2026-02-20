@@ -1,0 +1,29 @@
+{
+  "name": "claude-code-reflector",
+  "version": "0.1.0",
+  "description": "Background analysis system that processes Claude Code sessions to surface missing rules, skill gaps, and patterns",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "scan": "tsx src/index.ts scan",
+    "scan:dry-run": "tsx src/index.ts scan --dry-run",
+    "report": "tsx src/index.ts report",
+    "reset": "tsx src/index.ts reset"
+  },
+  "keywords": ["claude", "reflector", "analysis", "cli"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/vertex-sdk": "^0.14.4",
+    "commander": "^12.0.0",
+    "chalk": "^5.0.0",
+    "ora": "^8.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "tsx": "^4.0.0",
+    "@types/node": "^20.0.0"
+  }
+}

@@ -1,0 +1,6 @@
+node_modules/
+dist/
+reports/
+state.json
+state.json.tmp
+*.tsbuildinfo
