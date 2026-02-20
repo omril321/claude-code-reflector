@@ -16,7 +16,7 @@ export async function analyzeTier1(
   context: ContextInfo,
 ): Promise<Tier1Result> {
   const system = buildTier1SystemPrompt(context.claudeMdContent, context.skills);
-  const userMessage = buildTier1UserMessage(session.conversationText);
+  const userMessage = buildTier1UserMessage(session.conversationText, session.skillsUsed);
 
   const response = await callHaiku(system, userMessage);
 

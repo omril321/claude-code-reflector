@@ -6,8 +6,8 @@ import { createReadStream } from 'fs';
 import { createInterface } from 'readline';
 import type { RawJSONLEntry, CondensedSession, SessionIndexEntry } from '../types/session.js';
 
-const MAX_ASSISTANT_CHARS = 200;
-const MAX_TOTAL_CHARS = 150_000;
+const MAX_ASSISTANT_CHARS = 2000;
+const MAX_TOTAL_CHARS = 500_000;
 
 interface ParsedMessage {
   role: 'user' | 'assistant';

@@ -47,7 +47,7 @@ src/
 - **SDK**: `@anthropic-ai/vertex-sdk` with `AnthropicVertex` client, model `claude-haiku-4-5@20251001`
 - **JSONL parsing**: `readline.createInterface` + `createReadStream` (same pattern as code-claude-auto-learn)
 - **State persistence**: Atomic write (temp file + rename), saved after each session for crash safety
-- **Truncation**: Assistant messages capped at 200 chars; sessions over 150K chars keep first 20 + last 20 user messages
+- **Truncation**: Assistant messages capped at 2000 chars; sessions over 500K chars keep first 20 + last 20 user messages
 - **Naming**: kebab-case files, PascalCase types, camelCase functions
 
 ## Environment
@@ -70,3 +70,7 @@ Requires (via `gcloud auth application-default login`):
 - `missing-rule` — user gave instructions repeatedly that should be in CLAUDE.md
 - `skill-unused` — a skill was clearly relevant but never invoked
 - `skill-correction` — a skill was used but user had to correct its behavior
+
+## Design Principles
+
+- **Bad recommendations are worse than none** — the analyzer must have enough context to make informed recommendations. If it can't confidently suggest a specific action, it should not flag the finding.
