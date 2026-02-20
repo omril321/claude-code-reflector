@@ -7,6 +7,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
+    "pipeline": "tsx src/index.ts pipeline",
     "scan": "tsx src/index.ts scan",
     "scan:dry-run": "tsx src/index.ts scan --dry-run",
     "verify": "tsx src/index.ts verify",

@@ -20,7 +20,7 @@ const DELAY_MS = 500;
 const MAX_RETRIES = 3;
 const INITIAL_BACKOFF_MS = 2000;
 
-const DEFAULT_MODEL = 'claude-sonnet-4@20250514';
+const DEFAULT_MODEL = 'claude-haiku-4-5@20251001';
 
 const MODEL_ALIASES: Record<string, string> = {
   haiku: 'claude-haiku-4-5@20251001',

@@ -226,6 +226,130 @@ program
   });
 
 program
+  .command('pipeline')
+  .description('Full pipeline: scan → verify → report')
+  .option('--all', 'Ignore state, process all sessions')
+  .option('--exclude <paths...>', 'Project paths to exclude', DEFAULT_EXCLUDES)
+  .option('--min-messages <n>', 'Minimum message count', String(DEFAULT_MIN_MESSAGES))
+  .option('--limit <n>', 'Maximum sessions to process')
+  .option('--model <name>', 'Model for verification (haiku|sonnet)', 'sonnet')
+  .action(async (opts) => {
+    const minMessages = parseInt(opts.minMessages, 10);
+    const limit = opts.limit ? parseInt(opts.limit, 10) : undefined;
+
+    // --- Tier 1: Scan ---
+    console.log(chalk.bold('\n── Tier 1: Scan ──\n'));
+
+    const spinner = ora('Scanning sessions...').start();
+    const entries = await readAllSessionEntries({
+      excludedPaths: opts.exclude,
+      minMessages,
+    });
+    spinner.succeed(`Found ${entries.length} sessions matching filters`);
+
+    const state = opts.all ? { ...DEFAULT_STATE, processedSessions: {} } : await loadState();
+    let toProcess = entries.filter(
+      e => !isSessionProcessed(state, e.sessionId, e.modified),
+    );
+
+    if (toProcess.length === 0) {
+      console.log(chalk.green('All sessions already processed. Use --all to re-process.'));
+      return;
+    }
+
+    if (limit) {
+      toProcess = toProcess.slice(0, limit);
+    }
+
+    console.log(`Processing ${chalk.cyan(toProcess.length)} session(s)...`);
+
+    const context = await loadContext();
+    const scanResults: Tier1Result[] = [];
+
+    for (let i = 0; i < toProcess.length; i++) {
+      const entry = toProcess[i];
+      const label = `[${i + 1}/${toProcess.length}] ${entry.summary || entry.sessionId.slice(0, 8)}`;
+      const sessionSpinner = ora(label).start();
+
+      try {
+        const session = await parseSession(entry);
+        if (!session.conversationText.trim()) {
+          sessionSpinner.warn(`${label} - empty conversation, skipping`);
+          continue;
+        }
+
+        const result = await analyzeTier1(session, context);
+        scanResults.push(result);
+
+        markSessionProcessed(state, entry.sessionId, entry.modified, result.flags.length);
+        await saveState(state);
+
+        if (result.flags.length > 0) {
+          sessionSpinner.succeed(`${label} - ${chalk.yellow(`${result.flags.length} finding(s)`)}`);
+        } else {
+          sessionSpinner.succeed(`${label} - ${chalk.green('clean')}`);
+        }
+      } catch (err) {
+        sessionSpinner.fail(`${label} - ${chalk.red((err as Error).message)}`);
+      }
+    }
+
+    if (scanResults.length === 0) {
+      console.log(chalk.yellow('No sessions were analyzed.'));
+      return;
+    }
+
+    const reportPath = await writeReport(scanResults);
+    printSummary(scanResults);
+
+    // --- Tier 2: Verify ---
+    const sessionsWithFindings = scanResults.filter(r => r.flags.length > 0);
+    const totalFindings = sessionsWithFindings.reduce((sum, r) => sum + r.flags.length, 0);
+
+    if (sessionsWithFindings.length === 0) {
+      console.log(chalk.green('\nNo findings to verify — all sessions clean.'));
+      return;
+    }
+
+    const modelId = resolveModelId(opts.model);
+    console.log(chalk.bold('\n── Tier 2: Verify ──\n'));
+    console.log(`Verifying ${chalk.cyan(totalFindings)} finding(s) across ${chalk.cyan(sessionsWithFindings.length)} session(s) with ${chalk.dim(modelId)}`);
+
+    const verifyResults: Tier2Result[] = [];
+
+    for (let i = 0; i < sessionsWithFindings.length; i++) {
+      const tier1Result = sessionsWithFindings[i];
+      const label = `[${i + 1}/${sessionsWithFindings.length}] ${tier1Result.summary || tier1Result.sessionId.slice(0, 8)}`;
+      const vSpinner = ora(label).start();
+
+      try {
+        const entry = await findSessionEntry(tier1Result.sessionId);
+        if (!entry) {
+          vSpinner.warn(`${label} - session not found, skipping`);
+          continue;
+        }
+
+        const result = await verifySession(entry, tier1Result.flags, context, modelId);
+        verifyResults.push(result);
+
+        vSpinner.succeed(
+          `${label} - ${chalk.green(`${result.confirmedCount} confirmed`)}, ${chalk.red(`${result.rejectedCount} rejected`)}`,
+        );
+      } catch (err) {
+        vSpinner.fail(`${label} - ${chalk.red((err as Error).message)}`);
+      }
+    }
+
+    if (verifyResults.length > 0) {
+      await writeVerificationReport(verifyResults, reportPath, opts.model);
+
+      // --- Final Report ---
+      console.log(chalk.bold('\n── Verified Results ──'));
+      printVerificationSummary(verifyResults, opts.model);
+    }
+  });
+
+program
   .command('report')
   .description('View the latest report')
   .option('--json', 'Output raw JSON')
