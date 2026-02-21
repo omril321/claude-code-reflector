@@ -39,7 +39,7 @@ src/
 │   ├── session-parser.ts     # Stream JSONL → condensed conversation text
 │   └── skill-catalog.ts      # Load SKILL.md frontmatter + CLAUDE.md content
 ├── analyzer/
-│   ├── anthropic-client.ts   # Vertex AI SDK wrapper with retry + model config
+│   ├── anthropic-client.ts   # Vertex/Bedrock SDK wrapper with retry + model config
 │   ├── tier1.ts              # Tier 1 (Haiku) broad analysis
 │   ├── tier2.ts              # Tier 2 (Sonnet) deep verification
 │   ├── prompts.ts            # Tier 1 system/user prompt templates
@@ -61,8 +61,8 @@ Typical usage: `yarn pipeline -- --limit 50` (runs scan → verify → verified 
 ## Key Patterns
 
 - **Module system**: ESM (`"type": "module"`), all imports use `.js` extension
-- **SDK**: `@anthropic-ai/vertex-sdk` with `AnthropicVertex` client
-- **Models**: Tier 1 defaults to `claude-haiku-4-5@20251001`, Tier 2 to `claude-sonnet-4@20250514`. Configurable via `--model` flag on verify.
+- **SDK**: `@anthropic-ai/vertex-sdk` and `@anthropic-ai/bedrock-sdk` — auto-detected at runtime (see Environment section)
+- **Models**: Tier 1 defaults to Haiku, Tier 2 to Sonnet. Model aliases (`haiku`, `sonnet`) resolve to provider-specific IDs automatically. Configurable via `--model` flag on verify.
 - **JSONL parsing**: `readline.createInterface` + `createReadStream`
 - **Concurrency**: Sessions are processed in parallel (default 5, configurable via `--concurrency`). State saves are serialized via a promise queue to prevent corruption.
 - **State persistence**: Atomic write (temp file + rename), saved after each session for crash safety
@@ -71,9 +71,15 @@ Typical usage: `yarn pipeline -- --limit 50` (runs scan → verify → verified 
 
 ## Environment
 
-Requires (via `gcloud auth application-default login`):
+Provider is auto-detected: if `ANTHROPIC_VERTEX_PROJECT_ID` is set → Vertex AI, otherwise → AWS Bedrock. The chosen provider is printed at startup.
+
+**Vertex AI** (via `gcloud auth application-default login`):
+- `ANTHROPIC_VERTEX_PROJECT_ID` - GCP project ID (presence of this var selects Vertex)
 - `CLOUD_ML_REGION` - GCP region for Vertex AI
-- `ANTHROPIC_VERTEX_PROJECT_ID` - GCP project ID
+
+**AWS Bedrock** (via standard AWS credential chain):
+- `AWS_REGION` - AWS region (defaults to `us-east-1`)
+- `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` - or use `~/.aws/credentials`
 
 ## Data Flow
 

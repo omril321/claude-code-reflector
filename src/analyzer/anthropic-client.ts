@@ -1,17 +1,41 @@
 /**
- * Thin wrapper around the Anthropic Vertex SDK with retry logic
+ * Thin wrapper around the Anthropic Vertex/Bedrock SDKs with retry logic.
+ * Auto-detects provider: Vertex if ANTHROPIC_VERTEX_PROJECT_ID is set, Bedrock otherwise.
  */
 
 import AnthropicVertex from '@anthropic-ai/vertex-sdk';
+import AnthropicBedrock from '@anthropic-ai/bedrock-sdk';
+import chalk from 'chalk';
 
-let client: AnthropicVertex | null = null;
+type Provider = 'vertex' | 'bedrock';
 
-function getClient(): AnthropicVertex {
+let detectedProvider: Provider | null = null;
+
+function getProvider(): Provider {
+  if (!detectedProvider) {
+    if (process.env.ANTHROPIC_VERTEX_PROJECT_ID) {
+      detectedProvider = 'vertex';
+      console.log(chalk.dim(`Provider: Vertex AI (ANTHROPIC_VERTEX_PROJECT_ID is set)`));
+    } else {
+      detectedProvider = 'bedrock';
+      console.log(chalk.dim(`Provider: AWS Bedrock (ANTHROPIC_VERTEX_PROJECT_ID not found)`));
+    }
+  }
+  return detectedProvider;
+}
+
+let client: AnthropicVertex | AnthropicBedrock | null = null;
+
+function getClient(): AnthropicVertex | AnthropicBedrock {
   if (!client) {
-    client = new AnthropicVertex({
-      region: process.env.CLOUD_ML_REGION,
-      projectId: process.env.ANTHROPIC_VERTEX_PROJECT_ID,
-    });
+    if (getProvider() === 'vertex') {
+      client = new AnthropicVertex({
+        region: process.env.CLOUD_ML_REGION,
+        projectId: process.env.ANTHROPIC_VERTEX_PROJECT_ID,
+      });
+    } else {
+      client = new AnthropicBedrock();
+    }
   }
   return client;
 }
@@ -20,11 +44,14 @@ const DELAY_MS = 500;
 const MAX_RETRIES = 3;
 const INITIAL_BACKOFF_MS = 2000;
 
-const DEFAULT_MODEL = 'claude-haiku-4-5@20251001';
-
-const MODEL_ALIASES: Record<string, string> = {
+const VERTEX_ALIASES: Record<string, string> = {
   haiku: 'claude-haiku-4-5@20251001',
   sonnet: 'claude-sonnet-4@20250514',
+};
+
+const BEDROCK_ALIASES: Record<string, string> = {
+  haiku: 'anthropic.claude-haiku-4-5-20251001-v1:0',
+  sonnet: 'anthropic.claude-sonnet-4-20250514-v1:0',
 };
 
 interface ModelPricing {
@@ -35,6 +62,8 @@ interface ModelPricing {
 const MODEL_PRICING: Record<string, ModelPricing> = {
   'claude-haiku-4-5@20251001': { inputPerMillion: 1.0, outputPerMillion: 5.0 },
   'claude-sonnet-4@20250514': { inputPerMillion: 3.0, outputPerMillion: 15.0 },
+  'anthropic.claude-haiku-4-5-20251001-v1:0': { inputPerMillion: 1.0, outputPerMillion: 5.0 },
+  'anthropic.claude-sonnet-4-20250514-v1:0': { inputPerMillion: 3.0, outputPerMillion: 15.0 },
 };
 
 const DEFAULT_PRICING: ModelPricing = { inputPerMillion: 3.0, outputPerMillion: 15.0 };
@@ -45,7 +74,8 @@ export function getModelPricing(model: string): ModelPricing {
 }
 
 export function resolveModelId(nameOrId: string): string {
-  return MODEL_ALIASES[nameOrId] ?? nameOrId;
+  const aliases = getProvider() === 'vertex' ? VERTEX_ALIASES : BEDROCK_ALIASES;
+  return aliases[nameOrId] ?? nameOrId;
 }
 
 export interface LLMResponse {
@@ -67,7 +97,7 @@ export async function callModel(
   userMessage: string,
   options?: CallModelOptions,
 ): Promise<LLMResponse> {
-  const model = resolveModelId(options?.model ?? DEFAULT_MODEL);
+  const model = resolveModelId(options?.model ?? 'haiku');
   const maxTokens = options?.maxTokens ?? 4096;
 
   // Small delay between calls

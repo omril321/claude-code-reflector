@@ -14,18 +14,24 @@
     "report": "tsx src/index.ts report",
     "reset": "tsx src/index.ts reset"
   },
-  "keywords": ["claude", "reflector", "analysis", "cli"],
+  "keywords": [
+    "claude",
+    "reflector",
+    "analysis",
+    "cli"
+  ],
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@anthropic-ai/bedrock-sdk": "^0.26.4",
     "@anthropic-ai/vertex-sdk": "^0.14.4",
-    "commander": "^12.0.0",
     "chalk": "^5.0.0",
+    "commander": "^12.0.0",
     "ora": "^8.0.0"
   },
   "devDependencies": {
-    "typescript": "^5.0.0",
+    "@types/node": "^20.0.0",
     "tsx": "^4.0.0",
-    "@types/node": "^20.0.0"
+    "typescript": "^5.0.0"
   }
 }
