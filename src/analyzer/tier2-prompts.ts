@@ -28,6 +28,17 @@ For each finding, determine:
 - Is it already covered by an existing CLAUDE.md rule? Check carefully against the rules below.
 - Would a reasonable AI developer follow this convention without being told?
 - Is it already covered by an available skill? If so, the skill should be updated instead — reject the missing-rule finding.
+- **For rejection-based findings** (where a \`[rejected]\` marker shows the user rejected a tool action):
+  - Verify the \`[rejected]\` marker with user feedback is present in the full conversation
+  - Is the user's corrective instruction a generalizable preference, or a one-time task-specific direction? ("don't create new files" is generalizable; "no, do the other task first" is task-specific)
+  - Would the rejection recur in future sessions without the rule? If Claude would reasonably try the same action again, the rule is needed.
+  - Is the rejected action something Claude would reasonably attempt again in similar contexts?
+  - Rejections without specific user feedback (\`[rejected]\` with no text) should be rejected — not enough signal.
+- **For try-fail-learn findings** (where Claude ran a command that failed and then corrected itself):
+  - Verify the tool action, \`[error]\` output, and subsequent correction are all present in the full conversation
+  - Is the correction genuinely a user/project-specific preference (e.g., package manager, test runner), or just normal debugging (file not found, typo, compilation error)?
+  - Would the same failure recur in a new session without this rule?
+  - Is the suggested rule specific enough to be actionable? ("Use yarn as the package manager" is good; "avoid errors" is not)
 
 ### skill-unused
 - In the full conversation, was the skill's use case genuinely present?
