@@ -50,8 +50,8 @@ const VERTEX_ALIASES: Record<string, string> = {
 };
 
 const BEDROCK_ALIASES: Record<string, string> = {
-  haiku: 'anthropic.claude-haiku-4-5-20251001-v1:0',
-  sonnet: 'anthropic.claude-sonnet-4-20250514-v1:0',
+  haiku: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+  sonnet: 'us.anthropic.claude-sonnet-4-20250514-v1:0',
 };
 
 interface ModelPricing {
@@ -62,8 +62,8 @@ interface ModelPricing {
 const MODEL_PRICING: Record<string, ModelPricing> = {
   'claude-haiku-4-5@20251001': { inputPerMillion: 1.0, outputPerMillion: 5.0 },
   'claude-sonnet-4@20250514': { inputPerMillion: 3.0, outputPerMillion: 15.0 },
-  'anthropic.claude-haiku-4-5-20251001-v1:0': { inputPerMillion: 1.0, outputPerMillion: 5.0 },
-  'anthropic.claude-sonnet-4-20250514-v1:0': { inputPerMillion: 3.0, outputPerMillion: 15.0 },
+  'us.anthropic.claude-haiku-4-5-20251001-v1:0': { inputPerMillion: 1.0, outputPerMillion: 5.0 },
+  'us.anthropic.claude-sonnet-4-20250514-v1:0': { inputPerMillion: 3.0, outputPerMillion: 15.0 },
 };
 
 const DEFAULT_PRICING: ModelPricing = { inputPerMillion: 3.0, outputPerMillion: 15.0 };
