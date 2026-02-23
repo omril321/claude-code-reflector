@@ -40,6 +40,19 @@ export async function readAllSessionEntries(options: ScanOptions): Promise<Sessi
       const index: SessionIndex = JSON.parse(content);
 
       for (const entry of index.entries) {
+        if (!shouldInclude(entry, options)) continue;
+        try {
+          await fs.access(entry.fullPath);
+          entries.push(entry);
+        } catch {
+          // JSONL file deleted — skip phantom entry
+        }
+      }
+
+      // Supplement: discover JSONL files not listed in the index
+      const indexedIds = new Set(index.entries.map(e => e.sessionId));
+      const extraEntries = await discoverSessionsFromJsonl(projectDir, indexedIds);
+      for (const entry of extraEntries) {
         if (shouldInclude(entry, options)) {
           entries.push(entry);
         }
@@ -108,6 +121,13 @@ export async function findSessionEntry(sessionId: string): Promise<SessionIndexE
       const index: SessionIndex = JSON.parse(content);
       const entry = index.entries.find(e => e.sessionId === sessionId);
       if (entry) return entry;
+
+      // Index exists but doesn't list this session — try JSONL directly
+      const jsonlPath = join(projectDir, `${sessionId}.jsonl`);
+      try {
+        const extracted = await extractSessionMetadata(jsonlPath);
+        if (extracted) return extracted;
+      } catch { /* file doesn't exist */ }
     } catch {
       const jsonlPath = join(projectDir, `${sessionId}.jsonl`);
       try {
@@ -128,7 +148,10 @@ function normalizePath(p: string): string {
 /**
  * Discover sessions by scanning JSONL files directly (fallback when sessions-index.json is missing)
  */
-async function discoverSessionsFromJsonl(projectDir: string): Promise<SessionIndexEntry[]> {
+async function discoverSessionsFromJsonl(
+  projectDir: string,
+  skipSessionIds?: Set<string>,
+): Promise<SessionIndexEntry[]> {
   let files: string[];
   try {
     const dirents = await fs.readdir(projectDir);
@@ -139,6 +162,7 @@ async function discoverSessionsFromJsonl(projectDir: string): Promise<SessionInd
 
   const entries: SessionIndexEntry[] = [];
   for (const file of files) {
+    if (skipSessionIds?.has(basename(file, '.jsonl'))) continue;
     try {
       const entry = await extractSessionMetadata(join(projectDir, file));
       if (entry) entries.push(entry);
