@@ -35,7 +35,7 @@ src/
 │   ├── findings.ts           # Tier1Flag, Tier2Verdict, reports
 │   └── state.ts              # ReflectorState, ProcessedSessionRecord
 ├── scanner/
-│   ├── index-reader.ts       # Glob sessions-index.json, filter entries
+│   ├── index-reader.ts       # Session discovery (index + JSONL fallback), filter entries
 │   ├── session-parser.ts     # Stream JSONL → condensed conversation text
 │   └── skill-catalog.ts      # Load SKILL.md frontmatter + CLAUDE.md content
 ├── analyzer/
@@ -83,7 +83,7 @@ Provider is auto-detected: if `ANTHROPIC_VERTEX_PROJECT_ID` is set → Vertex AI
 
 ## Data Flow
 
-1. **Scan** `~/.claude/projects/*/sessions-index.json` for session entries
+1. **Scan** `~/.claude/projects/*/sessions-index.json` for session entries; fall back to scanning `*.jsonl` files directly when the index is missing
 2. **Filter** by message count (min 4), sidechain status, excluded paths
 3. **Parse** JSONL files into condensed conversation text with skill usage tracking
 4. **Analyze** each session with Haiku (Tier 1) against current CLAUDE.md rules + full skill catalog
@@ -91,6 +91,23 @@ Provider is auto-detected: if `ANTHROPIC_VERTEX_PROJECT_ID` is set → Vertex AI
 6. **Report** Tier 1 findings as JSON + console summary
 7. **Verify** (optional) — Tier 2 reads full untruncated sessions and confirms/rejects each finding
 8. **Verified report** — only confirmed findings with refined recommendations and evidence
+
+## Session JSONL Schema
+
+Key fields in `~/.claude/projects/*/*.jsonl` entries used by `index-reader.ts` and `session-parser.ts`:
+
+| Field | Location | Description |
+|-------|----------|-------------|
+| `cwd` | Top-level | Project working directory (used as `projectPath`) |
+| `sessionId` | Top-level | Session identifier (also derivable from filename) |
+| `timestamp` | Top-level | ISO timestamp of the entry |
+| `gitBranch` | Top-level | Git branch at time of session |
+| `isSidechain` | Top-level | Whether this is a sidechain session |
+| `type` | Top-level | Entry type: `"summary"`, `"progress"`, or omitted for messages |
+| `message.role` | Nested | `"user"`, `"assistant"`, or `"system"` |
+| `message.content` | Nested | String or array of content blocks (`{type: "text", text: "..."}`, `{type: "tool_use", ...}`, etc.) |
+
+`sessions-index.json` may not exist in all project directories. The fallback in `index-reader.ts` reconstructs `SessionIndexEntry` from these JSONL fields directly.
 
 ## Finding Types
 
