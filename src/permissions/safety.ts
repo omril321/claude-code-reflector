@@ -16,6 +16,12 @@ const DESTRUCTIVE = ['rm', 'rmdir', 'shred', 'unlink'];
 const PERMISSION_CMDS = ['chmod', 'chown', 'chgrp'];
 // System-level commands
 const SYSTEM_CMDS = ['sudo', 'su', 'kill', 'pkill', 'killall'];
+// File-modifying commands that are dangerous with wildcards
+const FILE_MODIFY_CMDS = ['cp', 'mv', 'sed'];
+// Shell execution commands
+const SHELL_EXEC_CMDS = ['source', 'bash', 'sh', 'eval', 'exec', 'tmux'];
+// System state modifiers
+const SYSTEM_STATE_CMDS = ['defaults', 'export'];
 // Git write operations (when wildcarded)
 const GIT_WRITE_SUBCOMMANDS = [
   'push', 'reset', 'clean', 'rebase', 'merge', 'stash',
@@ -24,6 +30,40 @@ const GIT_WRITE_SUBCOMMANDS = [
 const GIT_WILDCARD_DANGEROUS = [
   'checkout', 'branch',
 ];
+
+// gh subcommands that include destructive operations (create/delete/close)
+const GH_DANGEROUS_SUBCOMMANDS = ['repo', 'release', 'api'];
+
+// Package manager commands that install arbitrary packages
+const PACKAGE_INSTALL_CMDS = new Set(['install', 'add', 'i']);
+
+// Safe read-only git subcommands (skip LLM, auto-approve)
+const GIT_SAFE_SUBCOMMANDS = [
+  'status', 'diff', 'log', 'show', 'fetch', 'ls-files', 'ls-tree',
+  'rev-parse', 'remote', 'check-ignore', 'describe', 'tag',
+  'shortlog', 'blame', 'config',
+];
+
+// Package manager script commands are safe (defined in project package.json)
+const SAFE_PACKAGE_SCRIPTS = new Set([
+  'build', 'lint', 'test', 'test:unit', 'test:run', 'test:e2e',
+  'tsc', 'typecheck', 'type-check', 'check', 'fmt', 'fmt.check',
+  'format', 'dev', 'start', 'preview', 'clean', 'prepare',
+  'tsx', 'generate', 'codegen', 'cf-typegen', 'why',
+  'build:widgets', 'lint:fix',
+]);
+
+// Package manager bases
+const PACKAGE_MANAGERS = new Set(['yarn', 'npm', 'npx', 'pnpm']);
+
+// Read-only commands that are always safe
+const ALWAYS_SAFE = new Set([
+  'ls', 'cat', 'head', 'tail', 'wc', 'grep', 'find', 'which',
+  'file', 'stat', 'du', 'df', 'readlink', 'basename', 'dirname',
+  'test', 'true', 'false', 'pwd', 'whoami', 'hostname', 'date',
+  'uname', 'arch', 'mdfind', 'mdls', 'lsof', 'xxd', 'hexdump',
+  'sleep', 'printf', 'git', // bare git = git status
+]);
 
 /**
  * Assess safety of permission patterns using blocklist + LLM
@@ -35,6 +75,11 @@ export async function assessSafety(
   const needsLlm: PermissionPattern[] = [];
 
   for (const pattern of patterns) {
+    const safeResult = checkSafelist(pattern.pattern);
+    if (safeResult) {
+      results.set(pattern.pattern, safeResult);
+      continue;
+    }
     const blocklistResult = checkBlocklist(pattern.pattern);
     if (blocklistResult) {
       results.set(pattern.pattern, blocklistResult);
@@ -51,6 +96,52 @@ export async function assessSafety(
   }
 
   return results;
+}
+
+/**
+ * Auto-approve known safe patterns (read-only commands, package manager scripts)
+ */
+function checkSafelist(pattern: string): SafetyResult | null {
+  const match = pattern.match(/^Bash\((.+?)\s*(?:\*)?\)$/);
+  if (!match) return null;
+
+  const command = match[1].trim();
+  const parts = command.split(/\s+/);
+  const baseCmd = parts[0];
+  const isWildcard = pattern.includes(' *)');
+  const isExact = !isWildcard;
+
+  // Read-only commands (with or without wildcards)
+  if (ALWAYS_SAFE.has(baseCmd) && parts.length === 1) {
+    return { safe: true, reason: `${baseCmd} is a read-only command` };
+  }
+
+  // Package manager + known script name
+  if (PACKAGE_MANAGERS.has(baseCmd) && parts.length >= 2) {
+    const script = parts[1];
+    if (SAFE_PACKAGE_SCRIPTS.has(script)) {
+      return { safe: true, reason: `${baseCmd} ${script} runs a standard project script` };
+    }
+  }
+
+  // Safe git subcommands
+  if (baseCmd === 'git' && parts.length >= 2) {
+    const subcommand = parts[1];
+    if (GIT_SAFE_SUBCOMMANDS.includes(subcommand)) {
+      return { safe: true, reason: `git ${subcommand} is a read-only operation` };
+    }
+    // git add is staging-only, reversible
+    if (subcommand === 'add') {
+      return { safe: true, reason: 'git add stages files, reversible with git reset' };
+    }
+  }
+
+  // mkdir is safe (creating directories is non-destructive)
+  if (baseCmd === 'mkdir') {
+    return { safe: true, reason: 'mkdir creates directories, non-destructive' };
+  }
+
+  return null;
 }
 
 function checkBlocklist(pattern: string): SafetyResult | null {
@@ -95,26 +186,66 @@ function checkBlocklist(pattern: string): SafetyResult | null {
     if (isWildcard && GIT_WILDCARD_DANGEROUS.includes(subcommand)) {
       return { safe: false, reason: `git ${subcommand} with wildcards can be destructive` };
     }
+
+    // git commit * can pass --amend, --no-verify
+    if (subcommand === 'commit' && isWildcard) {
+      return { safe: false, reason: 'git commit * could pass --amend or --no-verify flags' };
+    }
+  }
+
+  // gh subcommands with destructive operations
+  if (baseCmd === 'gh' && parts.length >= 2 && isWildcard) {
+    const subcommand = parts[1];
+    if (GH_DANGEROUS_SUBCOMMANDS.includes(subcommand)) {
+      return { safe: false, reason: `gh ${subcommand} * includes destructive operations (delete, etc.)` };
+    }
+  }
+
+  // Package manager install/add with wildcards
+  if (PACKAGE_MANAGERS.has(baseCmd) && parts.length >= 2 && isWildcard) {
+    const script = parts[1];
+    if (PACKAGE_INSTALL_CMDS.has(script)) {
+      return { safe: false, reason: `${baseCmd} ${script} * can install arbitrary packages` };
+    }
+  }
+
+  // File-modifying commands with wildcards
+  if (isWildcard && FILE_MODIFY_CMDS.includes(baseCmd)) {
+    return { safe: false, reason: `${baseCmd} with wildcards can overwrite files` };
+  }
+
+  // Shell execution commands
+  if (SHELL_EXEC_CMDS.includes(baseCmd)) {
+    return { safe: false, reason: `${baseCmd} executes arbitrary code` };
+  }
+
+  // System state modifiers
+  if (SYSTEM_STATE_CMDS.includes(baseCmd)) {
+    return { safe: false, reason: `${baseCmd} modifies system state` };
   }
 
   return null;
 }
 
-const SYSTEM_PROMPT = `You are a security reviewer for Claude Code permission patterns. You assess whether auto-allowing a tool pattern is safe.
+const SYSTEM_PROMPT = `You are a security reviewer for Claude Code permission patterns. These patterns auto-allow tool usage in a developer's local CLI environment.
 
-A permission pattern like "Bash(git diff *)" means: automatically allow running any Bash command that starts with "git diff " without asking the user.
-A pattern like "Edit" means: automatically allow all Edit tool uses.
+A pattern like "Bash(git diff *)" means: auto-allow any Bash command starting with "git diff ".
 A pattern like "Bash(ls)" means: allow only the exact command "ls".
 
-Rules:
-- Mark SAFE patterns that are read-only, non-destructive, and limited in scope
-- Mark UNSAFE patterns that could delete data, modify system state, exfiltrate data, or escalate privileges
-- Wildcard patterns need extra scrutiny: "git branch" (show current branch) is safe, "git branch *" (could delete branches) is dangerous
-- When in doubt, mark UNSAFE
-- Consider what the worst-case command matching the pattern could do
+Context:
+- These run in a LOCAL development environment on the developer's own machine
+- The developer has already used and approved these commands multiple times
+- This is about convenience, not production security
 
-Respond with a JSON array of objects: [{"index": 1, "safe": true/false, "reason": "brief explanation"}]
-Only output the JSON array, no other text.`;
+Guidelines:
+- SAFE: Read-only commands, standard dev tooling, local build/test/lint commands
+- UNSAFE: Commands that delete data, modify remote state, install arbitrary packages, or execute arbitrary code
+- Wildcard patterns need scrutiny: "git branch" (show current) is safe, "git branch *" (could delete branches) is dangerous
+- "yarn <script>" and "npm run <script>" run project-defined scripts from package.json — generally safe for known scripts
+- "gh pr *", "gh issue *" are read-heavy GitHub CLI subcommands — generally safe. But "gh *" is too broad.
+- When genuinely uncertain, mark UNSAFE
+
+Respond with ONLY a JSON array: [{"index": 1, "safe": true/false, "reason": "brief explanation"}]`;
 
 const BATCH_SIZE = 30;
 

@@ -8,6 +8,7 @@ import { isToolAllowed } from './settings-reader.js';
 // Commands where we keep first 2 words as the base
 const MULTI_WORD_COMMANDS = new Set([
   'git', 'yarn', 'npm', 'npx', 'pnpm', 'docker', 'kubectl',
+  'gh', 'gcloud', 'brew', 'claude',
 ]);
 
 export interface AnalysisResult {
@@ -53,9 +54,10 @@ export function analyzeToolUses(records: ToolUseRecord[], allowList: string[]): 
     }
   }
 
-  // Sort by approval count descending
+  // Sort by approval count descending, filter low-signal patterns
+  const MIN_APPROVALS = 3;
   const patterns = Array.from(patternMap.values())
-    .filter(p => p.approvalCount > 0)
+    .filter(p => p.approvalCount >= MIN_APPROVALS)
     .sort((a, b) => b.approvalCount - a.approvalCount);
 
   return { patterns, alreadyCovered };
