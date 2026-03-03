@@ -353,8 +353,7 @@ program
 
     if (sessionsWithFindings.length === 0) {
       console.log(chalk.green('\nNo findings to verify — all sessions clean.'));
-      return;
-    }
+    } else {
 
     const modelId = resolveModelId(opts.model);
     console.log(chalk.bold('\n── Tier 2: Verify ──\n'));
@@ -395,6 +394,8 @@ program
       console.log(chalk.bold('\n── Verified Results ──'));
       printVerificationSummary(verifyResults, opts.model);
     }
+
+    } // end Tier 2 else block
 
     // --- Permissions Analysis ---
     console.log(chalk.bold('\n── Permissions ──\n'));
