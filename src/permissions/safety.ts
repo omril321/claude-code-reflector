@@ -100,16 +100,7 @@ function checkBlocklist(pattern: string): SafetyResult | null {
   return null;
 }
 
-async function batchLlmAssessment(
-  patterns: PermissionPattern[],
-): Promise<Map<string, SafetyResult>> {
-  const results = new Map<string, SafetyResult>();
-
-  const patternList = patterns
-    .map((p, i) => `${i + 1}. ${p.pattern} (used ${p.approvalCount} times)`)
-    .join('\n');
-
-  const system = `You are a security reviewer for Claude Code permission patterns. You assess whether auto-allowing a tool pattern is safe.
+const SYSTEM_PROMPT = `You are a security reviewer for Claude Code permission patterns. You assess whether auto-allowing a tool pattern is safe.
 
 A permission pattern like "Bash(git diff *)" means: automatically allow running any Bash command that starts with "git diff " without asking the user.
 A pattern like "Edit" means: automatically allow all Edit tool uses.
@@ -125,12 +116,42 @@ Rules:
 Respond with a JSON array of objects: [{"index": 1, "safe": true/false, "reason": "brief explanation"}]
 Only output the JSON array, no other text.`;
 
+const BATCH_SIZE = 30;
+
+async function batchLlmAssessment(
+  patterns: PermissionPattern[],
+): Promise<Map<string, SafetyResult>> {
+  const results = new Map<string, SafetyResult>();
+
+  // Process in chunks to avoid output truncation
+  for (let start = 0; start < patterns.length; start += BATCH_SIZE) {
+    const chunk = patterns.slice(start, start + BATCH_SIZE);
+    const chunkResults = await assessChunk(chunk);
+    for (const [pattern, result] of chunkResults) {
+      results.set(pattern, result);
+    }
+  }
+
+  return results;
+}
+
+async function assessChunk(
+  patterns: PermissionPattern[],
+): Promise<Map<string, SafetyResult>> {
+  const results = new Map<string, SafetyResult>();
+
+  const patternList = patterns
+    .map((p, i) => `${i + 1}. ${p.pattern} (used ${p.approvalCount} times)`)
+    .join('\n');
+
   const user = `Assess the safety of these permission patterns:\n\n${patternList}`;
 
   try {
-    const response = await callModel(system, user, { model: 'haiku', maxTokens: Math.min(patterns.length * 80, 8192) });
+    const response = await callModel(SYSTEM_PROMPT, user, { model: 'haiku', maxTokens: patterns.length * 80 });
 
-    const parsed = JSON.parse(response.text) as Array<{ index: number; safe: boolean; reason: string }>;
+    // Strip markdown code fences if present
+    const jsonText = response.text.replace(/^```(?:json)?\s*\n?/m, '').replace(/\n?```\s*$/m, '').trim();
+    const parsed = JSON.parse(jsonText) as Array<{ index: number; safe: boolean; reason: string }>;
 
     for (const item of parsed) {
       const pattern = patterns[item.index - 1];
@@ -138,8 +159,9 @@ Only output the JSON array, no other text.`;
         results.set(pattern.pattern, { safe: item.safe, reason: item.reason });
       }
     }
-  } catch {
-    // LLM failed — fail closed, mark all as unsafe
+  } catch (err) {
+    console.error(`LLM safety assessment failed for batch: ${(err as Error).message}`);
+    // Fail closed
     for (const pattern of patterns) {
       results.set(pattern.pattern, { safe: false, reason: 'LLM assessment failed — marking unsafe' });
     }
