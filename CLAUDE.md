@@ -19,8 +19,11 @@ Sibling project to `~/private/code-claude-auto-learn` (which captures what the u
 | `yarn verify` | Deep-verify latest Tier 1 findings with Sonnet |
 | `yarn verify -- --model sonnet` | Verify with specific model |
 | `yarn verify -- --dry-run` | Show what would be verified |
+| `yarn permissions` | Analyze sessions and suggest missing permission configs |
+| `yarn permissions -- --limit 50` | Analyze up to 50 sessions |
 | `yarn report` | View latest Tier 1 report (human-readable) |
 | `yarn report -- --verified` | View latest verified report |
+| `yarn report -- --permissions` | View latest permissions report |
 | `yarn report -- --json` | View latest report as raw JSON |
 | `yarn reset` | Clear processing state |
 | `yarn build` | Compile TypeScript |
@@ -33,6 +36,7 @@ src/
 ├── types/
 │   ├── session.ts            # SessionIndexEntry, CondensedSession, RawJSONLEntry
 │   ├── findings.ts           # Tier1Flag, Tier2Verdict, reports
+│   ├── permissions.ts        # ToolUseRecord, PermissionPattern, PermissionReport
 │   └── state.ts              # ReflectorState, ProcessedSessionRecord
 ├── scanner/
 │   ├── index-reader.ts       # Session discovery (index + JSONL fallback), filter entries
@@ -44,6 +48,12 @@ src/
 │   ├── tier2.ts              # Tier 2 (Sonnet) deep verification
 │   ├── prompts.ts            # Tier 1 system/user prompt templates
 │   └── tier2-prompts.ts      # Tier 2 verification prompt templates
+├── permissions/
+│   ├── extractor.ts          # Stream JSONL → ToolUseRecord[] with approval tracking
+│   ├── settings-reader.ts    # Read ~/.claude/settings.json, pattern matching
+│   ├── analyzer.ts           # Bash normalization, aggregation, scope determination
+│   ├── safety.ts             # Blocklist + LLM safety assessment
+│   └── reporter.ts           # Permission report output + console summary
 ├── state/
 │   └── manager.ts            # Atomic JSON state persistence
 └── reporter/
@@ -56,7 +66,15 @@ src/
 
 **Tier 2 — Sonnet (deep verification):** Takes each Tier 1 finding and verifies it against the full, untruncated session. Confirms or rejects with reasoning and evidence quotes. Only processes sessions that Tier 1 flagged.
 
-Typical usage: `yarn pipeline -- --limit 50` (runs scan → verify → verified report in one command)
+Typical usage: `yarn pipeline -- --limit 50` (runs scan → verify → permissions → report in one command)
+
+## Permission Analysis
+
+Separate from the Tier 1/Tier 2 pipeline. Deterministic extraction of tool use patterns from sessions, cross-referenced against `~/.claude/settings.json` allow list. Suggests missing permission configurations that would save manual approvals.
+
+**Flow:** Extract tool_use/tool_result pairs → normalize to patterns → filter already-allowed → safety assessment (blocklist + LLM) → report with approval counts and scope recommendations.
+
+**Safety:** Two layers — hardcoded blocklist (rm, chmod, git push, sudo, etc.) and LLM batch assessment via Haiku. Unsafe patterns shown separately with reasons.
 
 ## Key Patterns
 

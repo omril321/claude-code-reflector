@@ -20,6 +20,12 @@ import {
 } from './reporter/index.js';
 import { DEFAULT_STATE, type ReflectorState } from './types/state.js';
 import type { Tier1Result, ReflectorReport, Tier2Result } from './types/findings.js';
+import type { PermissionReport, ToolUseRecord } from './types/permissions.js';
+import { loadAllowList } from './permissions/settings-reader.js';
+import { extractToolUses } from './permissions/extractor.js';
+import { analyzeToolUses, determineScope } from './permissions/analyzer.js';
+import { assessSafety } from './permissions/safety.js';
+import { writePermissionReport, printPermissionSummary, printLatestPermissionReport } from './permissions/reporter.js';
 import { promises as fs } from 'fs';
 import { join } from 'path';
 
@@ -389,6 +395,25 @@ program
       console.log(chalk.bold('\n── Verified Results ──'));
       printVerificationSummary(verifyResults, opts.model);
     }
+
+    // --- Permissions Analysis ---
+    console.log(chalk.bold('\n── Permissions ──\n'));
+    const permReport = await runPermissionsAnalysis({
+      limit: opts.limit,
+    });
+    if (permReport) {
+      printPermissionSummary(permReport);
+    }
+  });
+
+program
+  .command('permissions')
+  .description('Analyze sessions and suggest missing permission configurations')
+  .option('--limit <n>', 'Maximum sessions to process')
+  .option('--dry-run', 'List sessions without analysis')
+  .action(async (opts) => {
+    const report = await runPermissionsAnalysis(opts);
+    if (report) printPermissionSummary(report);
   });
 
 program
@@ -396,8 +421,11 @@ program
   .description('View the latest report')
   .option('--json', 'Output raw JSON')
   .option('--verified', 'Show the verified report instead of Tier 1')
+  .option('--permissions', 'Show the latest permissions report')
   .action(async (opts) => {
-    if (opts.verified) {
+    if (opts.permissions) {
+      await printLatestPermissionReport(opts.json);
+    } else if (opts.verified) {
       await printLatestVerifiedReport(opts.json);
     } else {
       await printLatestReport(opts.json);
@@ -419,5 +447,122 @@ program
       }
     }
   });
+
+// --- Permission analysis helper ---
+
+async function runPermissionsAnalysis(opts: {
+  limit?: string;
+  dryRun?: boolean;
+}): Promise<PermissionReport | null> {
+  const limit = opts.limit ? parseInt(opts.limit, 10) : undefined;
+
+  const spinner = ora('Scanning sessions...').start();
+  const entries = await readAllSessionEntries({
+    excludedPaths: DEFAULT_EXCLUDES,
+    minMessages: DEFAULT_MIN_MESSAGES,
+  });
+  spinner.succeed(`Found ${entries.length} sessions matching filters`);
+
+  if (entries.length === 0) {
+    console.log(chalk.yellow('No sessions to process.'));
+    return null;
+  }
+
+  const toProcess = limit ? entries.slice(0, limit) : entries;
+
+  if (opts.dryRun) {
+    console.log();
+    for (const entry of toProcess) {
+      console.log(`  ${chalk.dim(entry.sessionId.slice(0, 8))} ${entry.summary || entry.firstPrompt.slice(0, 60)}`);
+    }
+    console.log();
+    console.log(chalk.dim(`(dry run — ${toProcess.length} sessions would be analyzed)`));
+    return null;
+  }
+
+  // Load current allow list
+  const allowList = await loadAllowList();
+  console.log(chalk.dim(`Loaded ${allowList.length} existing allow patterns from settings.json`));
+
+  // Extract tool uses from all sessions
+  const allToolUses: ToolUseRecord[] = [];
+  let completed = 0;
+  const total = toProcess.length;
+
+  const extractSpinner = ora(`Extracting tool uses from ${total} sessions...`).start();
+
+  await processPool(toProcess, DEFAULT_CONCURRENCY, async (entry) => {
+    try {
+      const records = await extractToolUses(entry);
+      allToolUses.push(...records);
+    } catch {
+      // Skip sessions that can't be parsed
+    }
+    completed++;
+    extractSpinner.text = `Extracting tool uses... [${completed}/${total}]`;
+  });
+
+  extractSpinner.succeed(`Extracted ${allToolUses.length} tool uses from ${total} sessions`);
+
+  // Analyze and aggregate
+  const { patterns, alreadyCovered } = analyzeToolUses(allToolUses, allowList);
+
+  if (patterns.length === 0) {
+    console.log(chalk.green('No new permission patterns found — all tool uses are already covered.'));
+    return {
+      generatedAt: new Date().toISOString(),
+      sessionsScanned: toProcess.length,
+      totalToolUses: allToolUses.length,
+      alreadyCovered,
+      suggestions: [],
+      skipped: [],
+    };
+  }
+
+  // Safety assessment
+  const safetySpinner = ora(`Assessing safety of ${patterns.length} patterns...`).start();
+  const safetyResults = await assessSafety(patterns);
+  safetySpinner.succeed(`Safety assessment complete`);
+
+  // Build report
+  const suggestions: PermissionReport['suggestions'] = [];
+  const skipped: PermissionReport['skipped'] = [];
+
+  for (const pattern of patterns) {
+    const safety = safetyResults.get(pattern.pattern);
+    if (!safety || !safety.safe) {
+      skipped.push({
+        pattern: pattern.pattern,
+        reason: safety?.reason ?? 'unknown',
+        approvalCount: pattern.approvalCount,
+      });
+      continue;
+    }
+
+    const { scope, scopeDetail } = determineScope(pattern);
+    suggestions.push({
+      pattern: pattern.pattern,
+      approvalCount: pattern.approvalCount,
+      sessionCount: pattern.sessionIds.length,
+      scope,
+      scopeDetail,
+      safetyReason: safety.reason,
+    });
+  }
+
+  const report: PermissionReport = {
+    generatedAt: new Date().toISOString(),
+    sessionsScanned: toProcess.length,
+    totalToolUses: allToolUses.length,
+    alreadyCovered,
+    suggestions,
+    skipped,
+  };
+
+  const reportPath = await writePermissionReport(report);
+  console.log(chalk.dim(`Report saved to: ${reportPath}`));
+
+  return report;
+}
 
 program.parse();

@@ -11,6 +11,7 @@
     "scan": "tsx src/index.ts scan",
     "scan:dry-run": "tsx src/index.ts scan --dry-run",
     "verify": "tsx src/index.ts verify",
+    "permissions": "tsx src/index.ts permissions",
     "report": "tsx src/index.ts report",
     "reset": "tsx src/index.ts reset"
   },

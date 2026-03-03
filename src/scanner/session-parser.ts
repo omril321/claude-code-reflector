@@ -5,6 +5,7 @@
 import { createReadStream } from 'fs';
 import { createInterface } from 'readline';
 import type { RawJSONLEntry, CondensedSession, SessionIndexEntry } from '../types/session.js';
+import { extractResultContent, isUserRejection } from '../utils/jsonl.js';
 
 const MAX_ASSISTANT_CHARS = 2000;
 const MAX_TOTAL_CHARS = 500_000;
@@ -195,20 +196,6 @@ function extractKeyParam(toolName: string, input: unknown): string | null {
   return '';
 }
 
-function extractResultContent(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content
-      .filter((b: Record<string, unknown>) => b.type === 'text' && typeof b.text === 'string')
-      .map((b: Record<string, unknown>) => b.text as string)
-      .join('\n');
-  }
-  return '';
-}
-
-function isUserRejection(resultText: string): boolean {
-  return resultText.startsWith('The user doesn\'t want');
-}
 
 function isToolError(block: Record<string, unknown>, resultText: string): boolean {
   if (block.is_error === true) return true;
