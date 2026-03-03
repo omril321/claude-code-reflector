@@ -51,7 +51,7 @@ src/
 ├── permissions/
 │   ├── extractor.ts          # Stream JSONL → ToolUseRecord[] with approval tracking
 │   ├── settings-reader.ts    # Read ~/.claude/settings.json, pattern matching
-│   ├── analyzer.ts           # Bash normalization, aggregation, scope determination
+│   ├── analyzer.ts           # Bash normalization, aggregation, scope, overlap detection, annotations
 │   ├── safety.ts             # Blocklist + LLM safety assessment
 │   └── reporter.ts           # Permission report output + console summary
 ├── state/
@@ -72,9 +72,11 @@ Typical usage: `yarn pipeline -- --limit 50` (runs scan → verify → permissio
 
 Separate from the Tier 1/Tier 2 pipeline. Deterministic extraction of tool use patterns from sessions, cross-referenced against `~/.claude/settings.json` allow list. Suggests missing permission configurations that would save manual approvals.
 
-**Flow:** Extract tool_use/tool_result pairs → normalize to patterns → filter already-allowed → safety assessment (blocklist + LLM) → report with approval counts and scope recommendations.
+**Flow:** Extract tool_use/tool_result pairs → normalize to patterns → merge exact+wildcard duplicates (e.g., `Bash(ls)` + `Bash(ls *)` → `Bash(ls *)`) → filter already-allowed → safety assessment (blocklist + LLM) → annotate (partial overlaps, caveats) → report with approval counts, scope recommendations, and copy-paste JSON output.
 
 **Safety:** Two layers — hardcoded blocklist (rm, chmod, git push, sudo, etc.) and LLM batch assessment via Haiku. Unsafe patterns shown separately with reasons.
+
+**Annotations:** Suggestions are enriched with notes: partial overlap detection (e.g., `Bash(git fetch *)` "broadens existing `Bash(git fetch origin)`") and known caveats for patterns with destructive subcommands (e.g., `gh pr *` "includes merge/close"). Project paths display as `~/relative` in output.
 
 ## Key Patterns
 

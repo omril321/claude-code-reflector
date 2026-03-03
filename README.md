@@ -55,7 +55,7 @@ yarn pipeline -- --limit 30
 
 ```bash
 # Full pipeline (recommended)
-yarn pipeline                          # Scan → verify → report in one command
+yarn pipeline                          # Scan → verify → permissions → report
 yarn pipeline -- --limit 50            # Process up to 50 sessions
 yarn pipeline -- --all --limit 50      # Re-process from scratch
 yarn pipeline -- --concurrency 3       # Limit parallel API calls (default: 5)
@@ -71,9 +71,14 @@ yarn verify                       # Tier 2 only (verifies latest scan)
 yarn verify -- --model sonnet     # Verify with specific model
 yarn verify -- --dry-run          # Show what would be verified
 
+# Permission analysis
+yarn permissions                  # Suggest missing permission configs
+yarn permissions -- --limit 50    # Analyze up to 50 sessions
+
 # Reports
 yarn report                       # View latest Tier 1 report
 yarn report -- --verified         # View verified report
+yarn report -- --permissions      # View latest permissions report
 yarn report -- --json             # Raw JSON output
 
 # Maintenance
@@ -92,9 +97,23 @@ yarn pipeline -- --limit 50
 #    - skill-unused → update the skill's triggering description
 #    - skill-correction → update the skill's behavior
 
-# 3. Next time, run picks up where you left off
+# 3. Review permission suggestions and copy safe patterns to settings.json
+
+# 4. Next time, pipeline picks up where you left off
 yarn pipeline -- --limit 50
 ```
+
+## Permission Analysis
+
+Separate from the finding pipeline. Deterministic extraction of tool use patterns from sessions, cross-referenced against your `~/.claude/settings.json` allow list. Suggests permission patterns that would save manual approvals.
+
+The output includes:
+- **Suggestions** ranked by approval count, scoped to global or per-project
+- **Annotations** for patterns that broaden existing permissions or include destructive subcommands
+- **Copy-paste JSON** grouped by scope, ready to add to your settings.json
+- **Unsafe patterns** shown separately with reasons (destructive commands, arbitrary code execution, etc.)
+
+**Safety:** Two-layer assessment — hardcoded blocklist (rm, chmod, git push, sudo, etc.) plus LLM batch review via Haiku. Exact+wildcard duplicates are merged automatically (e.g., `Bash(ls)` + `Bash(ls *)` → `Bash(ls *)`).
 
 ## Architecture
 
@@ -111,12 +130,19 @@ src/
 │   ├── tier2.ts              # Sonnet deep verification
 │   ├── prompts.ts            # Tier 1 prompt templates
 │   └── tier2-prompts.ts      # Tier 2 prompt templates
+├── permissions/
+│   ├── extractor.ts          # Stream JSONL → ToolUseRecord[] with approval tracking
+│   ├── settings-reader.ts    # Read ~/.claude/settings.json, pattern matching
+│   ├── analyzer.ts           # Normalization, aggregation, overlap detection, annotations
+│   ├── safety.ts             # Blocklist + LLM safety assessment
+│   └── reporter.ts           # Permission report output + copy-paste JSON
 ├── state/
 │   └── manager.ts            # Incremental processing state
 ├── reporter/
 │   └── index.ts              # Report generation + console output
 └── types/
     ├── findings.ts           # Finding types (Tier1Flag, Tier2Verdict, reports)
+    ├── permissions.ts         # Permission types (ToolUseRecord, PermissionPattern, etc.)
     ├── session.ts            # Session types
     └── state.ts              # State types
 ```
