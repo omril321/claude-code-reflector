@@ -2,7 +2,7 @@
  * Normalizes tool uses into permission patterns and aggregates them
  */
 
-import type { ToolUseRecord, PermissionPattern } from '../types/permissions.js';
+import type { ToolUseRecord, PermissionPattern, PermissionSuggestion } from '../types/permissions.js';
 import { isToolAllowed } from './settings-reader.js';
 
 // Commands where we keep first 2 words as the base
@@ -52,6 +52,25 @@ export function analyzeToolUses(records: ToolUseRecord[], allowList: string[]): 
         projectPaths: [record.projectPath],
       });
     }
+  }
+
+  // Merge exact+wildcard duplicates: Bash(X) + Bash(X *) → Bash(X *)
+  for (const [key, pattern] of patternMap) {
+    const prefix = parseBashWildcard(key);
+    if (!prefix) continue;
+    const exactKey = `Bash(${prefix})`;
+    const exactPattern = patternMap.get(exactKey);
+    if (!exactPattern) continue;
+
+    pattern.approvalCount += exactPattern.approvalCount;
+    pattern.rejectionCount += exactPattern.rejectionCount;
+    for (const sid of exactPattern.sessionIds) {
+      if (!pattern.sessionIds.includes(sid)) pattern.sessionIds.push(sid);
+    }
+    for (const pp of exactPattern.projectPaths) {
+      if (!pattern.projectPaths.includes(pp)) pattern.projectPaths.push(pp);
+    }
+    patternMap.delete(exactKey);
   }
 
   // Sort by approval count descending, filter low-signal patterns
@@ -142,4 +161,55 @@ function isNoisePattern(pattern: string): boolean {
   if (base.includes('/') && !base.startsWith('./') && !base.startsWith('~/')) return true;
 
   return false;
+}
+
+/**
+ * Extract the command prefix from a wildcard pattern like "Bash(git fetch *)".
+ * Returns the prefix (e.g., "git fetch") or null if not a wildcard pattern.
+ */
+export function parseBashWildcard(pattern: string): string | null {
+  const match = pattern.match(/^Bash\((.+) \*\)$/);
+  return match ? match[1] : null;
+}
+
+/**
+ * Find an existing allow pattern that is a narrower version of the suggested pattern.
+ * E.g., suggested "Bash(git fetch *)" partially overlaps existing "Bash(git fetch origin)".
+ */
+export function findPartialOverlap(suggested: string, allowList: string[]): string | null {
+  const prefix = parseBashWildcard(suggested);
+  if (!prefix) return null;
+
+  for (const existing of allowList) {
+    const existingMatch = existing.match(/^Bash\((.+)\)$/);
+    if (!existingMatch) continue;
+    const existingCmd = existingMatch[1];
+    if (existingCmd.startsWith(prefix) && !existingCmd.endsWith('*') && existingCmd !== prefix) {
+      return existing;
+    }
+  }
+  return null;
+}
+
+// Patterns where the wildcard form includes dangerous subcommands
+const WILDCARD_CAVEATS: Record<string, string> = {
+  'Bash(gh pr *)': 'includes merge/close — review with care',
+  'Bash(gh issue *)': 'includes close/delete — review with care',
+};
+
+/**
+ * Add notes to suggestions for partial overlaps and known caveats.
+ */
+export function annotateSuggestions(suggestions: PermissionSuggestion[], allowList: string[]): void {
+  for (const s of suggestions) {
+    const notes: string[] = [];
+
+    const caveat = WILDCARD_CAVEATS[s.pattern];
+    if (caveat) notes.push(caveat);
+
+    const overlap = findPartialOverlap(s.pattern, allowList);
+    if (overlap) notes.push(`broadens existing \`${overlap}\``);
+
+    if (notes.length > 0) s.notes = notes;
+  }
 }

@@ -23,7 +23,7 @@ import type { Tier1Result, ReflectorReport, Tier2Result } from './types/findings
 import type { PermissionReport, ToolUseRecord } from './types/permissions.js';
 import { loadAllowList } from './permissions/settings-reader.js';
 import { extractToolUses } from './permissions/extractor.js';
-import { analyzeToolUses, determineScope } from './permissions/analyzer.js';
+import { analyzeToolUses, determineScope, annotateSuggestions } from './permissions/analyzer.js';
 import { assessSafety } from './permissions/safety.js';
 import { writePermissionReport, printPermissionSummary, printLatestPermissionReport } from './permissions/reporter.js';
 import { promises as fs } from 'fs';
@@ -550,6 +550,8 @@ async function runPermissionsAnalysis(opts: {
       safetyReason: safety.reason,
     });
   }
+
+  annotateSuggestions(suggestions, allowList);
 
   const report: PermissionReport = {
     generatedAt: new Date().toISOString(),

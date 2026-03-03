@@ -25,6 +25,7 @@ export interface PermissionSuggestion {
   scope: 'global' | 'project';
   scopeDetail?: string;
   safetyReason: string;
+  notes?: string[];
 }
 
 export interface PermissionReport {

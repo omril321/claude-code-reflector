@@ -4,11 +4,17 @@
 
 import { promises as fs } from 'fs';
 import { join } from 'path';
+import { homedir } from 'os';
 import chalk from 'chalk';
 import type { PermissionReport, PermissionSuggestion } from '../types/permissions.js';
 
 const PROJECT_DIR = join(import.meta.dirname, '..', '..');
 const REPORTS_DIR = join(PROJECT_DIR, 'reports');
+const HOME = homedir();
+
+function shortenPath(path: string): string {
+  return path.startsWith(HOME) ? '~' + path.slice(HOME.length) : path;
+}
 
 export async function writePermissionReport(report: PermissionReport): Promise<string> {
   await fs.mkdir(REPORTS_DIR, { recursive: true });
@@ -34,11 +40,19 @@ export function printPermissionSummary(report: PermissionReport): void {
       const countLabel = formatCountLabel(s);
       const scopeLabel = s.scope === 'global'
         ? 'Add to global permissions'
-        : `Add to project permissions (${s.scopeDetail})`;
+        : `Add to project permissions (${shortenPath(s.scopeDetail!)})`;
 
       console.log(`  ${chalk.bold(`${i + 1}.`)} ${chalk.cyan(s.pattern)}  ${chalk.dim(countLabel)}`);
       console.log(`     ${chalk.dim('→')} ${scopeLabel}`);
+      if (s.notes?.length) {
+        for (const note of s.notes) {
+          console.log(`     ${chalk.yellow('⚠')} ${chalk.dim(note)}`);
+        }
+      }
     }
+
+    // Copy-paste ready JSON output
+    printSettingsJson(report.suggestions);
   }
 
   if (report.skipped.length > 0) {
@@ -51,6 +65,41 @@ export function printPermissionSummary(report: PermissionReport): void {
   }
 
   console.log();
+}
+
+function printSettingsJson(suggestions: PermissionSuggestion[]): void {
+  const global = suggestions.filter(s => s.scope === 'global').map(s => s.pattern);
+  const byProject = new Map<string, string[]>();
+
+  for (const s of suggestions) {
+    if (s.scope === 'project' && s.scopeDetail) {
+      const key = shortenPath(s.scopeDetail);
+      const list = byProject.get(key) ?? [];
+      list.push(s.pattern);
+      byProject.set(key, list);
+    }
+  }
+
+  console.log();
+  console.log(chalk.bold('Copy-paste for settings.json'));
+  console.log(chalk.gray('─'.repeat(40)));
+
+  if (global.length > 0) {
+    console.log(chalk.dim('Global (add to ~/.claude/settings.json → permissions.allow):'));
+    console.log();
+    for (const pattern of global) {
+      console.log(`  ${chalk.green(`"${pattern}"`)}`);
+    }
+  }
+
+  for (const [project, patterns] of byProject) {
+    console.log();
+    console.log(chalk.dim(`Project: ${project} (add to project settings.json → permissions.allow):`));
+    console.log();
+    for (const pattern of patterns) {
+      console.log(`  ${chalk.green(`"${pattern}"`)}`);
+    }
+  }
 }
 
 export async function printLatestPermissionReport(asJson: boolean): Promise<void> {
