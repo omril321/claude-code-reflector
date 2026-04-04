@@ -5,6 +5,19 @@
 import type { PermissionPattern } from '../types/permissions.js';
 import { callModel } from '../analyzer/anthropic-client.js';
 
+/**
+ * Escape text for safe injection into LLM prompts.
+ * Handles quotes and newlines that could break JSON parsing.
+ */
+function escapeForLLMPrompt(text: string): string {
+  return text
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t');
+}
+
 export interface SafetyResult {
   safe: boolean;
   reason: string;
@@ -266,13 +279,31 @@ async function batchLlmAssessment(
   return results;
 }
 
+async function assessPatternIndividually(
+  pattern: PermissionPattern,
+): Promise<SafetyResult> {
+  const escapedPattern = escapeForLLMPrompt(pattern.pattern);
+  const user = `Assess the safety of this permission pattern:\n\n1. ${escapedPattern} (used ${pattern.approvalCount} times)`;
+
+  try {
+    const response = await callModel(SYSTEM_PROMPT, user, { model: 'haiku', maxTokens: 200 });
+    const jsonText = response.text.replace(/^```(?:json)?\s*\n?/m, '').replace(/\n?```\s*$/m, '').trim();
+    const parsed = JSON.parse(jsonText) as Array<{ index: number; safe: boolean; reason: string }>;
+    const item = parsed[0];
+    return { safe: item?.safe ?? false, reason: item?.reason ?? 'assessment inconclusive' };
+  } catch (err) {
+    return { safe: false, reason: `LLM assessment failed: ${(err as Error).message}` };
+  }
+}
+
 async function assessChunk(
   patterns: PermissionPattern[],
 ): Promise<Map<string, SafetyResult>> {
   const results = new Map<string, SafetyResult>();
 
+  // Escape all patterns for safe LLM injection
   const patternList = patterns
-    .map((p, i) => `${i + 1}. ${p.pattern} (used ${p.approvalCount} times)`)
+    .map((p, i) => `${i + 1}. ${escapeForLLMPrompt(p.pattern)} (used ${p.approvalCount} times)`)
     .join('\n');
 
   const user = `Assess the safety of these permission patterns:\n\n${patternList}`;
@@ -291,10 +322,13 @@ async function assessChunk(
       }
     }
   } catch (err) {
-    console.error(`LLM safety assessment failed for batch: ${(err as Error).message}`);
-    // Fail closed
+    console.error(`LLM batch assessment failed for chunk: ${(err as Error).message}`);
+    console.log('Falling back to individual pattern assessment...');
+
+    // Fallback: assess each pattern individually
     for (const pattern of patterns) {
-      results.set(pattern.pattern, { safe: false, reason: 'LLM assessment failed — marking unsafe' });
+      const result = await assessPatternIndividually(pattern);
+      results.set(pattern.pattern, result);
     }
   }
 

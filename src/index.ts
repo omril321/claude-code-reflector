@@ -179,7 +179,7 @@ program
 program
   .command('verify')
   .description('Deep-verify Tier 1 findings against full session conversations')
-  .option('--model <name>', 'Model to use (haiku|sonnet or full model ID)', 'sonnet')
+  .option('--model <name>', 'Model to use (haiku|sonnet|opus-4-6 or full model ID)', 'opus-4-6')
   .option('--report <path>', 'Path to Tier 1 report to verify (defaults to latest)')
   .option('--dry-run', 'Show what would be verified without calling AI')
   .option('--concurrency <n>', 'Number of parallel sessions to verify', String(DEFAULT_CONCURRENCY))
@@ -273,7 +273,7 @@ program
   .option('--min-messages <n>', 'Minimum message count', String(DEFAULT_MIN_MESSAGES))
   .option('--limit <n>', 'Maximum sessions to process')
   .option('--concurrency <n>', 'Number of parallel sessions to process', String(DEFAULT_CONCURRENCY))
-  .option('--model <name>', 'Model for verification (haiku|sonnet)', 'sonnet')
+  .option('--model <name>', 'Model for verification (haiku|sonnet|opus-4-6)', 'opus-4-6')
   .action(async (opts) => {
     const minMessages = parseInt(opts.minMessages, 10);
     const limit = opts.limit ? parseInt(opts.limit, 10) : undefined;
